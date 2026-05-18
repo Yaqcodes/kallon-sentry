@@ -1,0 +1,39 @@
+# Example systemd unit for Jetson / Ubuntu — copy to /etc/systemd/system/kallon-ptz-daemon.service
+# and adjust paths, user, and secrets.
+#
+#   sudo cp deploy/kallon-ptz-daemon.service.example /etc/systemd/system/kallon-ptz-daemon.service
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now kallon-ptz-daemon.service
+
+[Unit]
+Description=Kallon ONVIF PTZ daemon (JSON/TCP)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=kallon
+Group=kallon
+WorkingDirectory=/opt/kallon/CODE
+
+# Required on production systems (overrides script default password):
+Environment=CAMERA_PASSWORD=change_me
+
+# Optional: listen only on loopback (ArtemisOS / local clients on same host)
+Environment=PTZ_LISTEN_HOST=127.0.0.1
+Environment=PTZ_LISTEN_PORT=8765
+
+# Camera ONVIF is passed as CLI args below — edit IP/port/user as needed.
+ExecStart=/usr/bin/python3 /opt/kallon/CODE/kallon_ptz_daemon.py \
+    --host 192.168.1.108 -P 80 -u admin \
+    --listen-host 127.0.0.1 --listen-port 8765
+
+Restart=on-failure
+RestartSec=3
+
+# Hardening (tune for your image)
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
