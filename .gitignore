@@ -16,3 +16,27 @@ Thumbs.db
 bin/
 obj/
 *.bundle
+
+# Per-device secrets (live on Jetson under /etc/kallon or /etc/wireguard — never in git)
+device.env
+!device.env.example
+alert.key
+*.private
+/etc/wireguard/
+
+# Keys, tokens, VPN material
+*.pem
+*.key
+*token*
+*Token*
+wg-keys*
+.wg-keys*
+*@*
+
+# Editor / package artifacts
+*.swp
+*.assert
+
+# Local systemd units copied from examples (paths differ per machine)
+deploy/kallon-ptz-daemon.service
+deploy/kallon-watchdog.service

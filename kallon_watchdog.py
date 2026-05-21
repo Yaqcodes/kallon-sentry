@@ -1,0 +1,778 @@
+#!/usr/bin/env python3
+"""
+Kallon health & tamper watchdog — long-running daemon for Jetson Orin Nano.
+
+Phase 4 of the sovereign stack brief.
+
+What it monitors
+----------------
+- RTSP camera streams        : ffprobe, 10 s interval (state-tracked, recovered alerts)
+- CPU temperature            : /sys/class/thermal/thermal_zone*, 10 s interval,
+                               80/75 deg C hysteresis (recovered alerts)
+- MPU-6050 motion / impact   : I2C bus 7, motion-detection interrupt on GPIO pin 29
+- Magnetic reed door switch  : GPIO pin 31 (HIGH = door open)
+- Digital LDR cover sensor   : GPIO pin 33 (HIGH = bright / cover removed)
+- NVMe SMART health          : DISABLED by default (no SSD on bench yet)
+- Power undervoltage via ADC : DISABLED (no ADC on bench)
+
+Alert format
+------------
+- JSON body with device_id, timestamp_utc (RFC 3339 UTC), nonce (uuid4),
+  alert_type, severity, details.
+- Canonical JSON (sorted keys, no spaces). HMAC-SHA256 over the canonical body.
+- Header: X-Kallon-Signature: sha256=<hex>
+- Delivery: HTTP POST to ALERT_WEBHOOK_URL over WireGuard.
+- Up to 3 send attempts with exponential backoff (1 s, 2 s, 4 s).
+- 60 s dedup window per alert_type prevents alert storms.
+
+Configuration
+-------------
+Read from environment (typically set via /etc/kallon/device.env in systemd):
+
+  DEVICE_ID              required, e.g. kallon-unit-001
+  ALERT_WEBHOOK_URL      required, e.g. http://10.50.0.1:8080/alerts
+  ALERT_KEY_PATH         path to shared HMAC key file (default /etc/kallon/alert.key)
+  RTSP_URLS              comma-separated list, e.g. rtsp://127.0.0.1:8554/cam1
+  POLL_INTERVAL_SEC      default 10
+  TEMP_TRIGGER_C         default 80
+  TEMP_CLEAR_C           default 75
+  DEDUP_WINDOW_SEC       default 60
+  MPU_I2C_BUS            default 7  (Orin Nano J12 pins 3/5)
+  MPU_I2C_ADDR           default 0x68
+  GPIO_REED_PIN          default 31 (BOARD numbering)
+  GPIO_LDR_PIN           default 33
+  GPIO_MPU_INT_PIN       default 29
+  ENABLE_NVME            default 0   (set 1 once SSD is installed)
+  NVME_DEVICE            default /dev/nvme0
+  ENABLE_POWER_ADC       default 0   (no ADC on Orin Nano dev kit)
+
+CLI overrides match the env names (lowercased, dashes).
+
+Run as a non-root user that is a member of the `gpio` and `i2c` groups.
+"""
+
+from __future__ import annotations
+
+import argparse
+import dataclasses
+import enum
+import hashlib
+import hmac
+import json
+import logging
+import os
+import queue
+import shutil
+import signal
+import subprocess
+import sys
+import threading
+import time
+import uuid
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Optional
+
+LOG = logging.getLogger("kallon_watchdog")
+
+
+# ---------------------------------------------------------------------------
+# Alert model
+# ---------------------------------------------------------------------------
+
+
+class Severity(str, enum.Enum):
+    CRITICAL = "CRITICAL"
+    HIGH = "HIGH"
+    MEDIUM = "MEDIUM"
+
+
+class AlertType(str, enum.Enum):
+    TAMPER_DOOR_OPEN = "TAMPER_DOOR_OPEN"
+    TAMPER_DOOR_RECOVERED = "TAMPER_DOOR_RECOVERED"
+    TAMPER_LIGHT = "TAMPER_LIGHT"
+    TAMPER_LIGHT_RECOVERED = "TAMPER_LIGHT_RECOVERED"
+    TAMPER_IMPACT = "TAMPER_IMPACT"
+    CAMERA_STREAM_FAIL = "CAMERA_STREAM_FAIL"
+    CAMERA_STREAM_RECOVERED = "CAMERA_STREAM_RECOVERED"
+    TEMP_CRITICAL = "TEMP_CRITICAL"
+    TEMP_RECOVERED = "TEMP_RECOVERED"
+    DISK_FAULT = "DISK_FAULT"
+    POWER_UNDERVOLT = "POWER_UNDERVOLT"
+
+
+SEVERITY_BY_TYPE: dict[AlertType, Severity] = {
+    AlertType.TAMPER_DOOR_OPEN: Severity.CRITICAL,
+    AlertType.TAMPER_LIGHT: Severity.CRITICAL,
+    AlertType.TAMPER_IMPACT: Severity.HIGH,
+    AlertType.CAMERA_STREAM_FAIL: Severity.HIGH,
+    AlertType.TEMP_CRITICAL: Severity.HIGH,
+    AlertType.DISK_FAULT: Severity.HIGH,
+    AlertType.POWER_UNDERVOLT: Severity.MEDIUM,
+    AlertType.TAMPER_DOOR_RECOVERED: Severity.MEDIUM,
+    AlertType.TAMPER_LIGHT_RECOVERED: Severity.MEDIUM,
+    AlertType.CAMERA_STREAM_RECOVERED: Severity.MEDIUM,
+    AlertType.TEMP_RECOVERED: Severity.MEDIUM,
+}
+
+
+@dataclasses.dataclass
+class Alert:
+    alert_type: AlertType
+    details: dict[str, Any]
+
+
+# ---------------------------------------------------------------------------
+# Config
+# ---------------------------------------------------------------------------
+
+
+@dataclasses.dataclass
+class Config:
+    device_id: str
+    webhook_url: str
+    alert_key: bytes
+    rtsp_urls: list[str]
+    poll_interval_sec: float
+    temp_trigger_c: float
+    temp_clear_c: float
+    dedup_window_sec: float
+    mpu_i2c_bus: int
+    mpu_i2c_addr: int
+    gpio_reed_pin: int
+    gpio_ldr_pin: int
+    gpio_mpu_int_pin: int
+    enable_nvme: bool
+    nvme_device: str
+    enable_power_adc: bool
+
+
+def _env_int(name: str, default: int) -> int:
+    return int(os.environ.get(name, default))
+
+
+def _env_float(name: str, default: float) -> float:
+    return float(os.environ.get(name, default))
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    v = os.environ.get(name)
+    if v is None:
+        return default
+    return v.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def load_config(args: argparse.Namespace) -> Config:
+    device_id = args.device_id or os.environ.get("DEVICE_ID", "")
+    webhook_url = args.webhook_url or os.environ.get("ALERT_WEBHOOK_URL", "")
+    key_path = args.alert_key_path or os.environ.get(
+        "ALERT_KEY_PATH", "/etc/kallon/alert.key"
+    )
+    if not device_id:
+        raise SystemExit("DEVICE_ID is required (env or --device-id).")
+    if not webhook_url:
+        raise SystemExit("ALERT_WEBHOOK_URL is required (env or --webhook-url).")
+
+    key_bytes = Path(key_path).read_bytes().strip()
+    if not key_bytes:
+        raise SystemExit(f"Alert key file {key_path} is empty.")
+
+    rtsp_csv = args.rtsp_urls or os.environ.get("RTSP_URLS", "")
+    rtsp_urls = [u.strip() for u in rtsp_csv.split(",") if u.strip()]
+
+    return Config(
+        device_id=device_id,
+        webhook_url=webhook_url,
+        alert_key=key_bytes,
+        rtsp_urls=rtsp_urls,
+        poll_interval_sec=_env_float("POLL_INTERVAL_SEC", 10.0),
+        temp_trigger_c=_env_float("TEMP_TRIGGER_C", 80.0),
+        temp_clear_c=_env_float("TEMP_CLEAR_C", 75.0),
+        dedup_window_sec=_env_float("DEDUP_WINDOW_SEC", 60.0),
+        mpu_i2c_bus=_env_int("MPU_I2C_BUS", 7),
+        mpu_i2c_addr=int(os.environ.get("MPU_I2C_ADDR", "0x68"), 0),
+        gpio_reed_pin=_env_int("GPIO_REED_PIN", 31),
+        gpio_ldr_pin=_env_int("GPIO_LDR_PIN", 33),
+        gpio_mpu_int_pin=_env_int("GPIO_MPU_INT_PIN", 29),
+        enable_nvme=_env_bool("ENABLE_NVME", False),
+        nvme_device=os.environ.get("NVME_DEVICE", "/dev/nvme0"),
+        enable_power_adc=_env_bool("ENABLE_POWER_ADC", False),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Alert sender (HMAC, retry, dedup)
+# ---------------------------------------------------------------------------
+
+
+class AlertSender:
+    """Background sender. Thread-safe via an internal queue."""
+
+    def __init__(self, config: Config) -> None:
+        self.config = config
+        self._q: queue.Queue[Optional[Alert]] = queue.Queue()
+        self._last_sent: dict[AlertType, float] = {}
+        self._lock = threading.Lock()
+        self._thread = threading.Thread(target=self._run, name="alert-sender", daemon=True)
+        # Import lazily so the module is testable without the network library.
+        import requests  # noqa: WPS433
+        self._requests = requests
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._q.put(None)
+        self._thread.join(timeout=5.0)
+
+    def submit(self, alert: Alert) -> None:
+        """Enqueue an alert; dedup is applied just before sending."""
+        self._q.put(alert)
+
+    def _is_duplicate(self, alert_type: AlertType, now: float) -> bool:
+        with self._lock:
+            last = self._last_sent.get(alert_type)
+            if last is not None and (now - last) < self.config.dedup_window_sec:
+                return True
+            self._last_sent[alert_type] = now
+            return False
+
+    def _build_payload(self, alert: Alert) -> dict[str, Any]:
+        return {
+            "device_id": self.config.device_id,
+            "timestamp_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "nonce": str(uuid.uuid4()),
+            "alert_type": alert.alert_type.value,
+            "severity": SEVERITY_BY_TYPE[alert.alert_type].value,
+            "details": alert.details,
+        }
+
+    def _sign(self, body: bytes) -> str:
+        digest = hmac.new(self.config.alert_key, body, hashlib.sha256).hexdigest()
+        return f"sha256={digest}"
+
+    def _post_once(self, body: bytes, signature: str, timeout: float) -> tuple[bool, str]:
+        try:
+            resp = self._requests.post(
+                self.config.webhook_url,
+                data=body,
+                headers={
+                    "Content-Type": "application/json",
+                    "X-Kallon-Signature": signature,
+                },
+                timeout=timeout,
+            )
+            if 200 <= resp.status_code < 300:
+                return True, f"http_{resp.status_code}"
+            return False, f"http_{resp.status_code}"
+        except Exception as exc:  # noqa: BLE001
+            return False, f"net:{exc.__class__.__name__}"
+
+    def _send_with_retry(self, alert: Alert) -> None:
+        payload = self._build_payload(alert)
+        body = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
+        signature = self._sign(body)
+
+        backoff = 1.0
+        last_reason = ""
+        for attempt in range(1, 4):  # 3 attempts total
+            ok, reason = self._post_once(body, signature, timeout=5.0)
+            last_reason = reason
+            if ok:
+                LOG.info(
+                    "alert sent type=%s attempt=%d status=%s",
+                    alert.alert_type.value,
+                    attempt,
+                    reason,
+                )
+                return
+            LOG.warning(
+                "alert send failed type=%s attempt=%d reason=%s",
+                alert.alert_type.value,
+                attempt,
+                reason,
+            )
+            if attempt < 3:
+                time.sleep(backoff)
+                backoff *= 2.0
+        LOG.error(
+            "alert dropped after 3 attempts type=%s last_reason=%s",
+            alert.alert_type.value,
+            last_reason,
+        )
+
+    def _run(self) -> None:
+        while True:
+            alert = self._q.get()
+            if alert is None:
+                return
+            if self._is_duplicate(alert.alert_type, time.monotonic()):
+                LOG.info("alert suppressed (dedup) type=%s", alert.alert_type.value)
+                continue
+            try:
+                self._send_with_retry(alert)
+            except Exception:  # noqa: BLE001
+                LOG.exception("unhandled error sending alert type=%s", alert.alert_type.value)
+
+
+# ---------------------------------------------------------------------------
+# MPU-6050 driver (motion-detection interrupt)
+# ---------------------------------------------------------------------------
+
+
+# Register map (subset used here)
+MPU_PWR_MGMT_1 = 0x6B
+MPU_SMPLRT_DIV = 0x19
+MPU_CONFIG = 0x1A
+MPU_ACCEL_CONFIG = 0x1C
+MPU_MOT_THR = 0x1F
+MPU_MOT_DUR = 0x20
+MPU_INT_PIN_CFG = 0x37
+MPU_INT_ENABLE = 0x38
+MPU_INT_STATUS = 0x3A
+MPU_ACCEL_XOUT_H = 0x3B
+
+# Threshold tuned for "device picked up / moved notably", not road vibration.
+# MOT_THR LSB ~= 1 mg on MPU-6050 motion detection path.
+DEFAULT_MOT_THR = 20  # ~20 mg
+DEFAULT_MOT_DUR = 20  # 20 ms
+
+
+class MPU6050:
+    """Minimal MPU-6050 driver: motion interrupt + raw accel read for alert details."""
+
+    def __init__(self, bus_num: int, address: int) -> None:
+        from smbus2 import SMBus  # noqa: WPS433
+        self._bus = SMBus(bus_num)
+        self._addr = address
+
+    def init_motion_interrupt(self, mot_thr: int = DEFAULT_MOT_THR, mot_dur: int = DEFAULT_MOT_DUR) -> None:
+        b = self._bus
+        a = self._addr
+        # Device reset, wait, then wake (clock = internal 8 MHz).
+        b.write_byte_data(a, MPU_PWR_MGMT_1, 0x80)
+        time.sleep(0.1)
+        b.write_byte_data(a, MPU_PWR_MGMT_1, 0x00)
+        time.sleep(0.05)
+        # Sample rate divisor (1 kHz / (1+SMPLRT_DIV)); 0 keeps full rate.
+        b.write_byte_data(a, MPU_SMPLRT_DIV, 0x00)
+        # DLPF off (motion path uses HPF in ACCEL_CONFIG anyway).
+        b.write_byte_data(a, MPU_CONFIG, 0x00)
+        # Accel +/-2g full scale, HPF = 5 Hz so steady gravity is rejected.
+        b.write_byte_data(a, MPU_ACCEL_CONFIG, 0x01)
+        # INT pin: active high, push-pull, 50 us pulse, cleared on any read.
+        b.write_byte_data(a, MPU_INT_PIN_CFG, 0x10)
+        # Enable Motion-detection interrupt only.
+        b.write_byte_data(a, MPU_INT_ENABLE, 0x40)
+        # Motion duration and threshold.
+        b.write_byte_data(a, MPU_MOT_DUR, mot_dur & 0xFF)
+        b.write_byte_data(a, MPU_MOT_THR, mot_thr & 0xFF)
+
+    def read_int_status(self) -> int:
+        return self._bus.read_byte_data(self._addr, MPU_INT_STATUS)
+
+    def read_accel_g(self) -> tuple[float, float, float]:
+        raw = self._bus.read_i2c_block_data(self._addr, MPU_ACCEL_XOUT_H, 6)
+        def s16(hi: int, lo: int) -> int:
+            v = (hi << 8) | lo
+            return v - 0x10000 if v & 0x8000 else v
+        # +/-2g full scale -> 16384 LSB/g
+        x = s16(raw[0], raw[1]) / 16384.0
+        y = s16(raw[2], raw[3]) / 16384.0
+        z = s16(raw[4], raw[5]) / 16384.0
+        return x, y, z
+
+    def close(self) -> None:
+        try:
+            self._bus.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+# ---------------------------------------------------------------------------
+# GPIO + interrupt handlers
+# ---------------------------------------------------------------------------
+
+
+class GpioHandlers:
+    """Reed switch, LDR, and MPU INT — edge-triggered via Jetson.GPIO."""
+
+    def __init__(self, config: Config, sender: AlertSender, mpu: Optional[MPU6050]) -> None:
+        self.config = config
+        self.sender = sender
+        self.mpu = mpu
+        # State for recovered alerts. None = not yet known.
+        self._door_open: Optional[bool] = None
+        self._light_bright: Optional[bool] = None
+        import Jetson.GPIO as GPIO  # noqa: WPS433
+        self._gpio = GPIO
+
+    def setup(self) -> None:
+        GPIO = self._gpio
+        GPIO.setwarnings(False)
+        GPIO.setmode(GPIO.BOARD)
+        # Reed: door open = HIGH, door closed = LOW. External pull-up to 3V3 already on board.
+        GPIO.setup(self.config.gpio_reed_pin, GPIO.IN)
+        # LDR: bright = HIGH, dark = LOW. Module provides its own digital output.
+        GPIO.setup(self.config.gpio_ldr_pin, GPIO.IN)
+        # MPU INT: active high pulse from the sensor.
+        GPIO.setup(self.config.gpio_mpu_int_pin, GPIO.IN)
+
+        # Seed initial states so we only alert on real transitions.
+        self._door_open = GPIO.input(self.config.gpio_reed_pin) == GPIO.HIGH
+        self._light_bright = GPIO.input(self.config.gpio_ldr_pin) == GPIO.HIGH
+        LOG.info(
+            "initial GPIO state door_open=%s light_bright=%s",
+            self._door_open,
+            self._light_bright,
+        )
+        # If we boot with door open or cover off, fire one alert immediately.
+        if self._door_open:
+            self.sender.submit(Alert(
+                AlertType.TAMPER_DOOR_OPEN,
+                {"gpio_pin": self.config.gpio_reed_pin, "level": "HIGH", "boot_state": True},
+            ))
+        if self._light_bright:
+            self.sender.submit(Alert(
+                AlertType.TAMPER_LIGHT,
+                {"gpio_pin": self.config.gpio_ldr_pin, "level": "HIGH", "boot_state": True},
+            ))
+
+        GPIO.add_event_detect(
+            self.config.gpio_reed_pin,
+            GPIO.BOTH,
+            callback=self._on_reed,
+            bouncetime=50,
+        )
+        GPIO.add_event_detect(
+            self.config.gpio_ldr_pin,
+            GPIO.BOTH,
+            callback=self._on_ldr,
+            bouncetime=50,
+        )
+        if self.mpu is not None:
+            GPIO.add_event_detect(
+                self.config.gpio_mpu_int_pin,
+                GPIO.RISING,
+                callback=self._on_mpu_int,
+                bouncetime=50,
+            )
+
+    def teardown(self) -> None:
+        try:
+            self._gpio.cleanup()
+        except Exception:  # noqa: BLE001
+            pass
+
+    # Callbacks run on a background thread inside Jetson.GPIO.
+    def _on_reed(self, channel: int) -> None:
+        is_high = self._gpio.input(channel) == self._gpio.HIGH
+        if is_high and self._door_open is not True:
+            self._door_open = True
+            self.sender.submit(Alert(
+                AlertType.TAMPER_DOOR_OPEN,
+                {"gpio_pin": channel, "level": "HIGH"},
+            ))
+        elif not is_high and self._door_open is not False:
+            self._door_open = False
+            self.sender.submit(Alert(
+                AlertType.TAMPER_DOOR_RECOVERED,
+                {"gpio_pin": channel, "level": "LOW"},
+            ))
+
+    def _on_ldr(self, channel: int) -> None:
+        is_high = self._gpio.input(channel) == self._gpio.HIGH
+        if is_high and self._light_bright is not True:
+            self._light_bright = True
+            self.sender.submit(Alert(
+                AlertType.TAMPER_LIGHT,
+                {"gpio_pin": channel, "level": "HIGH"},
+            ))
+        elif not is_high and self._light_bright is not False:
+            self._light_bright = False
+            self.sender.submit(Alert(
+                AlertType.TAMPER_LIGHT_RECOVERED,
+                {"gpio_pin": channel, "level": "LOW"},
+            ))
+
+    def _on_mpu_int(self, channel: int) -> None:
+        if self.mpu is None:
+            return
+        try:
+            status = self.mpu.read_int_status()
+            x, y, z = self.mpu.read_accel_g()
+        except Exception:  # noqa: BLE001
+            LOG.exception("MPU read failed in interrupt handler")
+            return
+        # Bit 6 of INT_STATUS = motion detection.
+        if not (status & 0x40):
+            return
+        self.sender.submit(Alert(
+            AlertType.TAMPER_IMPACT,
+            {
+                "source": "mpu6050",
+                "threshold_mg": DEFAULT_MOT_THR,
+                "accel_g": {"x": round(x, 3), "y": round(y, 3), "z": round(z, 3)},
+            },
+        ))
+
+
+# ---------------------------------------------------------------------------
+# Pollers (RTSP, temperature, NVMe)
+# ---------------------------------------------------------------------------
+
+
+class RtspProbe:
+    def __init__(self, config: Config, sender: AlertSender) -> None:
+        self.config = config
+        self.sender = sender
+        self._failed: dict[str, bool] = {url: False for url in config.rtsp_urls}
+
+    def probe_once(self) -> None:
+        for url in self.config.rtsp_urls:
+            ok, exit_code, stderr_excerpt = self._ffprobe(url)
+            was_failed = self._failed.get(url, False)
+            if not ok and not was_failed:
+                self._failed[url] = True
+                self.sender.submit(Alert(
+                    AlertType.CAMERA_STREAM_FAIL,
+                    {"url": url, "exit_code": exit_code, "stderr_excerpt": stderr_excerpt},
+                ))
+            elif ok and was_failed:
+                self._failed[url] = False
+                self.sender.submit(Alert(
+                    AlertType.CAMERA_STREAM_RECOVERED,
+                    {"url": url},
+                ))
+
+    @staticmethod
+    def _ffprobe(url: str) -> tuple[bool, int, str]:
+        ffprobe = shutil.which("ffprobe")
+        if not ffprobe:
+            return False, -1, "ffprobe not installed"
+        try:
+            proc = subprocess.run(  # noqa: S603
+                [
+                    ffprobe,
+                    "-v", "error",
+                    "-rtsp_transport", "tcp",
+                    "-select_streams", "v:0",
+                    "-show_entries", "stream=codec_name",
+                    "-of", "csv=p=0",
+                    url,
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=5.0,
+                check=False,
+            )
+            ok = proc.returncode == 0 and proc.stdout.strip() != b""
+            stderr_excerpt = proc.stderr.decode("utf-8", errors="replace").strip().splitlines()
+            excerpt = stderr_excerpt[0] if stderr_excerpt else ""
+            return ok, proc.returncode, excerpt[:200]
+        except subprocess.TimeoutExpired:
+            return False, -2, "ffprobe timeout 5s"
+        except Exception as exc:  # noqa: BLE001
+            return False, -3, f"{exc.__class__.__name__}: {exc}"[:200]
+
+
+class TemperatureProbe:
+    def __init__(self, config: Config, sender: AlertSender) -> None:
+        self.config = config
+        self.sender = sender
+        self._in_critical = False
+
+    def probe_once(self) -> None:
+        hottest = self._read_hottest_zone()
+        if hottest is None:
+            return
+        zone, celsius = hottest
+        if celsius >= self.config.temp_trigger_c and not self._in_critical:
+            self._in_critical = True
+            self.sender.submit(Alert(
+                AlertType.TEMP_CRITICAL,
+                {"zone": zone, "celsius": round(celsius, 1), "threshold_c": self.config.temp_trigger_c},
+            ))
+        elif celsius < self.config.temp_clear_c and self._in_critical:
+            self._in_critical = False
+            self.sender.submit(Alert(
+                AlertType.TEMP_RECOVERED,
+                {"zone": zone, "celsius": round(celsius, 1), "threshold_c": self.config.temp_clear_c},
+            ))
+
+    @staticmethod
+    def _read_hottest_zone() -> Optional[tuple[str, float]]:
+        base = Path("/sys/class/thermal")
+        if not base.exists():
+            return None
+        hottest: Optional[tuple[str, float]] = None
+        for zone_dir in sorted(base.glob("thermal_zone*")):
+            temp_file = zone_dir / "temp"
+            if not temp_file.exists():
+                continue
+            try:
+                millideg = int(temp_file.read_text().strip())
+            except (OSError, ValueError):
+                continue
+            celsius = millideg / 1000.0
+            if hottest is None or celsius > hottest[1]:
+                hottest = (zone_dir.name, celsius)
+        return hottest
+
+
+class NvmeProbe:
+    """NVMe SMART check. DISABLED unless ENABLE_NVME=1 and smartctl is present."""
+
+    def __init__(self, config: Config, sender: AlertSender) -> None:
+        self.config = config
+        self.sender = sender
+        self._faulted = False
+
+    def probe_once(self) -> None:
+        # Phase 4 keeps this implemented but inert on the current bench unit.
+        # Enable once an NVMe SSD is fitted: set ENABLE_NVME=1 in /etc/kallon/device.env.
+        if not self.config.enable_nvme:
+            return
+        smartctl = shutil.which("smartctl")
+        if not smartctl:
+            LOG.warning("ENABLE_NVME=1 but smartctl is not installed; skipping NVMe check.")
+            return
+        try:
+            proc = subprocess.run(  # noqa: S603
+                [smartctl, "-A", "-j", self.config.nvme_device],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=5.0,
+                check=False,
+            )
+            data = json.loads(proc.stdout.decode("utf-8", errors="replace") or "{}")
+        except Exception as exc:  # noqa: BLE001
+            LOG.warning("smartctl failed: %s", exc)
+            return
+        # Heuristic: reallocated sectors or critical_warning != 0.
+        warning = (
+            data.get("nvme_smart_health_information_log", {}).get("critical_warning", 0)
+        )
+        media_errors = (
+            data.get("nvme_smart_health_information_log", {}).get("media_errors", 0)
+        )
+        temp_c = data.get("temperature", {}).get("current", 0)
+        faulted = bool(warning) or media_errors > 0
+        if faulted and not self._faulted:
+            self._faulted = True
+            self.sender.submit(Alert(
+                AlertType.DISK_FAULT,
+                {
+                    "device": self.config.nvme_device,
+                    "critical_warning": warning,
+                    "media_errors": media_errors,
+                    "smart_temp_c": temp_c,
+                },
+            ))
+
+
+# ---------------------------------------------------------------------------
+# Main loop
+# ---------------------------------------------------------------------------
+
+
+def main(argv: Optional[list[str]] = None) -> int:
+    parser = argparse.ArgumentParser(description="Kallon health & tamper watchdog.")
+    parser.add_argument("--device-id", default=None, help="Override DEVICE_ID.")
+    parser.add_argument("--webhook-url", default=None, help="Override ALERT_WEBHOOK_URL.")
+    parser.add_argument("--alert-key-path", default=None, help="Override ALERT_KEY_PATH.")
+    parser.add_argument(
+        "--rtsp-urls",
+        default=None,
+        help="Comma-separated RTSP URLs (overrides RTSP_URLS env).",
+    )
+    parser.add_argument("--log-level", default=os.environ.get("LOG_LEVEL", "INFO"))
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Initialise everything and exit; useful to verify wiring on the bench.",
+    )
+    args = parser.parse_args(argv)
+
+    logging.basicConfig(
+        level=getattr(logging, args.log_level.upper(), logging.INFO),
+        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+        stream=sys.stderr,
+    )
+
+    config = load_config(args)
+    LOG.info(
+        "starting kallon_watchdog device_id=%s webhook=%s rtsp_count=%d",
+        config.device_id,
+        config.webhook_url,
+        len(config.rtsp_urls),
+    )
+
+    sender = AlertSender(config)
+    sender.start()
+
+    mpu: Optional[MPU6050] = None
+    try:
+        mpu = MPU6050(config.mpu_i2c_bus, config.mpu_i2c_addr)
+        mpu.init_motion_interrupt()
+        LOG.info(
+            "MPU-6050 ready bus=%d addr=0x%02X thr=%d dur=%dms",
+            config.mpu_i2c_bus,
+            config.mpu_i2c_addr,
+            DEFAULT_MOT_THR,
+            DEFAULT_MOT_DUR,
+        )
+    except Exception as exc:  # noqa: BLE001
+        LOG.error("MPU-6050 init failed; impact alerts disabled: %s", exc)
+        mpu = None
+
+    gpio_handlers = GpioHandlers(config, sender, mpu)
+    try:
+        gpio_handlers.setup()
+    except Exception:
+        LOG.exception("GPIO setup failed")
+        sender.stop()
+        return 1
+
+    rtsp_probe = RtspProbe(config, sender)
+    temp_probe = TemperatureProbe(config, sender)
+    nvme_probe = NvmeProbe(config, sender)
+
+    stop_event = threading.Event()
+
+    def _handle_signal(signum: int, _frame: Any) -> None:
+        LOG.info("signal %s received; shutting down", signum)
+        stop_event.set()
+
+    signal.signal(signal.SIGINT, _handle_signal)
+    signal.signal(signal.SIGTERM, _handle_signal)
+
+    if args.dry_run:
+        LOG.info("dry-run complete; exiting before poll loop.")
+        gpio_handlers.teardown()
+        sender.stop()
+        if mpu is not None:
+            mpu.close()
+        return 0
+
+    LOG.info("entering poll loop interval=%.1fs", config.poll_interval_sec)
+    try:
+        while not stop_event.is_set():
+            rtsp_probe.probe_once()
+            temp_probe.probe_once()
+            nvme_probe.probe_once()
+            # Power-voltage check via ADC is intentionally not invoked here:
+            # the Orin Nano dev kit exposes no ADC on J12. Add a Probe and a
+            # call here once a board-level voltage monitor is fitted.
+            stop_event.wait(config.poll_interval_sec)
+    finally:
+        gpio_handlers.teardown()
+        sender.stop()
+        if mpu is not None:
+            mpu.close()
+
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

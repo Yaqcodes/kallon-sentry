@@ -1,0 +1,39 @@
+# Example systemd unit for the Kallon health & tamper watchdog.
+# Install with deploy/install-kallon-watchdog.sh, or manually:
+#
+#   sudo cp deploy/kallon-watchdog.service.example /etc/systemd/system/kallon-watchdog.service
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now kallon-watchdog.service
+
+[Unit]
+Description=Kallon health and tamper watchdog
+After=network-online.target wg-quick@wg0.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=khalifa
+Group=khalifa
+# The user must also be in the `gpio` and `i2c` groups for /dev/gpiochip* and /dev/i2c-7.
+SupplementaryGroups=gpio i2c
+
+WorkingDirectory=/home/khalifa/kallon
+
+# Per-device secrets and configuration. Created by install-kallon-watchdog.sh.
+EnvironmentFile=/etc/kallon/device.env
+
+ExecStart=/usr/bin/python3 /home/khalifa/kallon/kallon_watchdog.py
+
+Restart=on-failure
+RestartSec=3
+
+# Hardening (loosen if you hit a path the daemon legitimately needs).
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+ReadOnlyPaths=/etc/kallon
+# /dev access for I2C and GPIO must remain available; do not set PrivateDevices=true.
+
+[Install]
+WantedBy=multi-user.target

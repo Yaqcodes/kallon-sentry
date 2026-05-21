@@ -229,7 +229,7 @@ The Dahua camera firmware runs multiple parallel access stacks by default: ONVIF
 **Tasks:**
 
 *Device side (Jetson):*
-- Install WireGuard: `apt install wireguard`
+- Install WireGuard: `apt install wireguard-tools` (kernel WG is built-in on 5.6+)
 - Write provisioning script: generates unique Ed25519 keypair per device, writes `/etc/wireguard/wg0.conf`
 - Configure `wg0` interface: device VPN IP, customer gateway endpoint, `AllowedIPs` scoped to customer subnet only (not `0.0.0.0/0`)
 - Enable as `systemd` service: `systemctl enable wg-quick@wg0`

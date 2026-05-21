@@ -49,6 +49,34 @@ Example request (then read one line of response), e.g. with `nc` on Linux:
 
 Copy **`deploy/kallon-ptz-daemon.service.example`** to `/etc/systemd/system/` on the Jetson, edit paths and `ExecStart`, then `systemctl enable --now kallon-ptz-daemon`.
 
+### Health & tamper watchdog (Phase 4, Jetson Orin Nano)
+
+**`kallon_watchdog.py`** is a single systemd-managed daemon that watches the camera, CPU temperature, and the tamper sensors wired to the 40-pin header (MPU-6050 on I2C bus 7, reed switch on pin 31, digital LDR on pin 33, MPU INT on pin 29). It posts HMAC-SHA256-signed JSON alerts to the customer NOC over the WireGuard tunnel, with up to 3 retries and a 60 s per-type dedup window.
+
+Pin assignments and sensor logic are documented in **`kallon_hardware_wiring.md`** (Rev A).
+
+Install (run on the Jetson):
+
+```bash
+cd /home/khalifa/kallon
+sudo deploy/install-kallon-watchdog.sh
+
+# then edit the templates the script wrote:
+sudoedit /etc/kallon/device.env
+sudoedit /etc/kallon/alert.key      # must match the NOC verifier
+
+sudo systemctl enable --now kallon-watchdog
+journalctl -u kallon-watchdog -f
+```
+
+Bench check without enabling the service yet:
+
+```bash
+sudo -u khalifa /usr/bin/python3 /home/khalifa/kallon/kallon_watchdog.py --dry-run
+```
+
+NVMe and power-voltage checks are implemented but disabled by default; flip `ENABLE_NVME=1` in `/etc/kallon/device.env` once an SSD is installed. The power-ADC check stays inert until an actual voltage monitor exists on the carrier.
+
 ## Command format (what the numbers mean)
 
 General shape (brackets mean optional; `|` means “pick one”):
