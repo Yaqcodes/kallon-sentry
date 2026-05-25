@@ -11,7 +11,7 @@ What it monitors
                                80/75 deg C hysteresis (recovered alerts)
 - MPU-6050 motion / impact   : I2C bus 7, motion-detection interrupt on GPIO pin 29
 - Magnetic reed door switch  : GPIO pin 31 (HIGH = door open)
-- Digital LDR cover sensor   : GPIO pin 33 (HIGH = bright / cover removed)
+- Digital LDR cover sensor   : GPIO pin 33 (active-low: LOW = bright / cover removed)
 - NVMe SMART health          : DISABLED by default (no SSD on bench yet)
 - Power undervoltage via ADC : DISABLED (no ADC on bench)
 
@@ -413,14 +413,14 @@ class GpioHandlers:
         GPIO.setmode(GPIO.BOARD)
         # Reed: door open = HIGH, door closed = LOW. External pull-up to 3V3 already on board.
         GPIO.setup(self.config.gpio_reed_pin, GPIO.IN)
-        # LDR: bright = HIGH, dark = LOW. Module provides its own digital output.
+        # LDR: active-low module — bright = LOW, dark = HIGH.
         GPIO.setup(self.config.gpio_ldr_pin, GPIO.IN)
         # MPU INT: active high pulse from the sensor.
         GPIO.setup(self.config.gpio_mpu_int_pin, GPIO.IN)
 
         # Seed initial states so we only alert on real transitions.
         self._door_open = GPIO.input(self.config.gpio_reed_pin) == GPIO.HIGH
-        self._light_bright = GPIO.input(self.config.gpio_ldr_pin) == GPIO.HIGH
+        self._light_bright = GPIO.input(self.config.gpio_ldr_pin) == GPIO.LOW
         LOG.info(
             "initial GPIO state door_open=%s light_bright=%s",
             self._door_open,
@@ -435,7 +435,7 @@ class GpioHandlers:
         if self._light_bright:
             self.sender.submit(Alert(
                 AlertType.TAMPER_LIGHT,
-                {"gpio_pin": self.config.gpio_ldr_pin, "level": "HIGH", "boot_state": True},
+                {"gpio_pin": self.config.gpio_ldr_pin, "level": "LOW", "boot_state": True},
             ))
 
         GPIO.add_event_detect(
@@ -481,18 +481,18 @@ class GpioHandlers:
             ))
 
     def _on_ldr(self, channel: int) -> None:
-        is_high = self._gpio.input(channel) == self._gpio.HIGH
-        if is_high and self._light_bright is not True:
+        is_low = self._gpio.input(channel) == self._gpio.LOW
+        if is_low and self._light_bright is not True:
             self._light_bright = True
             self.sender.submit(Alert(
                 AlertType.TAMPER_LIGHT,
-                {"gpio_pin": channel, "level": "HIGH"},
+                {"gpio_pin": channel, "level": "LOW"},
             ))
-        elif not is_high and self._light_bright is not False:
+        elif not is_low and self._light_bright is not False:
             self._light_bright = False
             self.sender.submit(Alert(
                 AlertType.TAMPER_LIGHT_RECOVERED,
-                {"gpio_pin": channel, "level": "LOW"},
+                {"gpio_pin": channel, "level": "HIGH"},
             ))
 
     def _on_mpu_int(self, channel: int) -> None:

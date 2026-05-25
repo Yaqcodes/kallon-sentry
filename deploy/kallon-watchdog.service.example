@@ -22,6 +22,10 @@ WorkingDirectory=/home/khalifa/kallon
 # Per-device secrets and configuration. Created by install-kallon-watchdog.sh.
 EnvironmentFile=/etc/kallon/device.env
 
+# Orin Nano Super: Jetson.GPIO 2.1.7 does not recognise the "-super" compatible
+# string. This env var tells the library which board it is without patching it.
+Environment=JETSON_MODEL_NAME=JETSON_ORIN_NANO
+
 ExecStart=/usr/bin/python3 /home/khalifa/kallon/kallon_watchdog.py
 
 Restart=on-failure

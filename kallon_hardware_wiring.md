@@ -44,7 +44,7 @@ Pin numbers above match the defaults baked into `kallon_watchdog.py` and the env
 | Sensor | Idle state on the wire | Alarm state | Alert types |
 |--------|------------------------|-------------|-------------|
 | Reed switch | Door closed → magnet present → contacts closed → **GPIO LOW** | Door open → contacts open → pull-up wins → **GPIO HIGH** | `TAMPER_DOOR_OPEN` / `TAMPER_DOOR_RECOVERED` |
-| Digital LDR | Inside enclosure is dark → module OUT **LOW** | Cover removed / light intrusion → OUT **HIGH** | `TAMPER_LIGHT` / `TAMPER_LIGHT_RECOVERED` |
+| Digital LDR (active-low) | Inside enclosure is dark → module OUT **HIGH** | Cover removed / light intrusion → OUT **LOW** | `TAMPER_LIGHT` / `TAMPER_LIGHT_RECOVERED` |
 | MPU-6050 | Steady, gravity-only signal → INT idle LOW | Motion above threshold → INT pulse HIGH | `TAMPER_IMPACT` |
 
 > Note on the reed wording: the line reads 3.3 V when the switch is open (door open or magnet not present) because the pull-up holds it high. When the door is closed and the magnet brings the contacts together, the line is shorted to GND and reads 0 V. The watchdog treats **HIGH = door open** and fires `TAMPER_DOOR_OPEN` on the LOW→HIGH transition.
@@ -60,7 +60,7 @@ Pin numbers above match the defaults baked into `kallon_watchdog.py` and the env
 - Magnet present (door closed): switch shorted → GPIO reads 0 V (LOW)
 - Magnet absent (door open):    switch open    → pull-up wins, GPIO reads 3.3 V (HIGH)
 
-If your LDR module is open-collector, add the same 10 kΩ pull-up to 3.3 V on the OUT line. Most boards with the LM393 comparator already drive HIGH/LOW actively, in which case no pull-up is needed.
+The LDR module is **active-low**: OUT goes LOW when light is detected, HIGH when dark. The watchdog treats **LOW = bright (alarm)** and **HIGH = dark (normal)**. If your module is the opposite, swap `GPIO.LOW` / `GPIO.HIGH` in `_on_ldr` inside `kallon_watchdog.py`.
 
 ### MPU-6050 motion-detection settings
 
