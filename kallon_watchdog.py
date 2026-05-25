@@ -9,7 +9,7 @@ What it monitors
 - RTSP camera streams        : ffprobe, 10 s interval (state-tracked, recovered alerts)
 - CPU temperature            : /sys/class/thermal/thermal_zone*, 10 s interval,
                                80/75 deg C hysteresis (recovered alerts)
-- MPU-6050 motion / impact   : I2C bus 7, motion-detection interrupt on GPIO pin 29
+- MPU-6050 motion / impact   : I2C bus 7, polled accel delta every poll interval
 - Magnetic reed door switch  : GPIO pin 31 (HIGH = door open)
 - Digital LDR cover sensor   : GPIO pin 33 (active-low: LOW = bright / cover removed)
 - NVMe SMART health          : DISABLED by default (no SSD on bench yet)
@@ -41,7 +41,7 @@ Read from environment (typically set via /etc/kallon/device.env in systemd):
   MPU_I2C_ADDR           default 0x68
   GPIO_REED_PIN          default 31 (BOARD numbering)
   GPIO_LDR_PIN           default 33
-  GPIO_MPU_INT_PIN       default 29
+  MPU_ACCEL_THRESHOLD_MG default 150  (delta from last reading to trigger impact)
   ENABLE_NVME            default 0   (set 1 once SSD is installed)
   NVME_DEVICE            default /dev/nvme0
   ENABLE_POWER_ADC       default 0   (no ADC on Orin Nano dev kit)
@@ -141,7 +141,7 @@ class Config:
     mpu_i2c_addr: int
     gpio_reed_pin: int
     gpio_ldr_pin: int
-    gpio_mpu_int_pin: int
+    mpu_accel_threshold_mg: float
     enable_nvme: bool
     nvme_device: str
     enable_power_adc: bool
@@ -193,7 +193,7 @@ def load_config(args: argparse.Namespace) -> Config:
         mpu_i2c_addr=int(os.environ.get("MPU_I2C_ADDR", "0x68"), 0),
         gpio_reed_pin=_env_int("GPIO_REED_PIN", 31),
         gpio_ldr_pin=_env_int("GPIO_LDR_PIN", 33),
-        gpio_mpu_int_pin=_env_int("GPIO_MPU_INT_PIN", 29),
+        mpu_accel_threshold_mg=_env_float("MPU_ACCEL_THRESHOLD_MG", 150.0),
         enable_nvme=_env_bool("ENABLE_NVME", False),
         nvme_device=os.environ.get("NVME_DEVICE", "/dev/nvme0"),
         enable_power_adc=_env_bool("ENABLE_POWER_ADC", False),
@@ -320,56 +320,29 @@ class AlertSender:
 # ---------------------------------------------------------------------------
 
 
-# Register map (subset used here)
 MPU_PWR_MGMT_1 = 0x6B
-MPU_SMPLRT_DIV = 0x19
-MPU_CONFIG = 0x1A
-MPU_ACCEL_CONFIG = 0x1C
-MPU_MOT_THR = 0x1F
-MPU_MOT_DUR = 0x20
-MPU_INT_PIN_CFG = 0x37
-MPU_INT_ENABLE = 0x38
-MPU_INT_STATUS = 0x3A
 MPU_ACCEL_XOUT_H = 0x3B
-
-# Threshold tuned for "device picked up / moved notably", not road vibration.
-# MOT_THR LSB ~= 1 mg on MPU-6050 motion detection path.
-DEFAULT_MOT_THR = 20  # ~20 mg
-DEFAULT_MOT_DUR = 20  # 20 ms
 
 
 class MPU6050:
-    """Minimal MPU-6050 driver: motion interrupt + raw accel read for alert details."""
+    """Minimal MPU-6050 driver: wake + raw accel read.
+
+    Hardware motion-detection registers (0x1F/0x20) are broken on many
+    clone chips, so we poll accel readings and detect motion in software.
+    """
 
     def __init__(self, bus_num: int, address: int) -> None:
         from smbus2 import SMBus  # noqa: WPS433
         self._bus = SMBus(bus_num)
         self._addr = address
 
-    def init_motion_interrupt(self, mot_thr: int = DEFAULT_MOT_THR, mot_dur: int = DEFAULT_MOT_DUR) -> None:
+    def init(self) -> None:
         b = self._bus
         a = self._addr
-        # Device reset, wait, then wake (clock = internal 8 MHz).
-        b.write_byte_data(a, MPU_PWR_MGMT_1, 0x80)
+        b.write_byte_data(a, MPU_PWR_MGMT_1, 0x80)  # reset
         time.sleep(0.1)
-        b.write_byte_data(a, MPU_PWR_MGMT_1, 0x00)
+        b.write_byte_data(a, MPU_PWR_MGMT_1, 0x00)  # wake, internal clock
         time.sleep(0.05)
-        # Sample rate divisor (1 kHz / (1+SMPLRT_DIV)); 0 keeps full rate.
-        b.write_byte_data(a, MPU_SMPLRT_DIV, 0x00)
-        # DLPF off (motion path uses HPF in ACCEL_CONFIG anyway).
-        b.write_byte_data(a, MPU_CONFIG, 0x00)
-        # Accel +/-2g full scale, HPF = 5 Hz so steady gravity is rejected.
-        b.write_byte_data(a, MPU_ACCEL_CONFIG, 0x01)
-        # INT pin: active high, push-pull, 50 us pulse, cleared on any read.
-        b.write_byte_data(a, MPU_INT_PIN_CFG, 0x10)
-        # Enable Motion-detection interrupt only.
-        b.write_byte_data(a, MPU_INT_ENABLE, 0x40)
-        # Motion duration and threshold.
-        b.write_byte_data(a, MPU_MOT_DUR, mot_dur & 0xFF)
-        b.write_byte_data(a, MPU_MOT_THR, mot_thr & 0xFF)
-
-    def read_int_status(self) -> int:
-        return self._bus.read_byte_data(self._addr, MPU_INT_STATUS)
 
     def read_accel_g(self) -> tuple[float, float, float]:
         raw = self._bus.read_i2c_block_data(self._addr, MPU_ACCEL_XOUT_H, 6)
@@ -397,10 +370,9 @@ class MPU6050:
 class GpioHandlers:
     """Reed switch, LDR, and MPU INT — edge-triggered via Jetson.GPIO."""
 
-    def __init__(self, config: Config, sender: AlertSender, mpu: Optional[MPU6050]) -> None:
+    def __init__(self, config: Config, sender: AlertSender) -> None:
         self.config = config
         self.sender = sender
-        self.mpu = mpu
         # State for recovered alerts. None = not yet known.
         self._door_open: Optional[bool] = None
         self._light_bright: Optional[bool] = None
@@ -415,9 +387,6 @@ class GpioHandlers:
         GPIO.setup(self.config.gpio_reed_pin, GPIO.IN)
         # LDR: active-low module — bright = LOW, dark = HIGH.
         GPIO.setup(self.config.gpio_ldr_pin, GPIO.IN)
-        # MPU INT: active high pulse from the sensor.
-        GPIO.setup(self.config.gpio_mpu_int_pin, GPIO.IN)
-
         # Seed initial states so we only alert on real transitions.
         self._door_open = GPIO.input(self.config.gpio_reed_pin) == GPIO.HIGH
         self._light_bright = GPIO.input(self.config.gpio_ldr_pin) == GPIO.LOW
@@ -450,13 +419,6 @@ class GpioHandlers:
             callback=self._on_ldr,
             bouncetime=50,
         )
-        if self.mpu is not None:
-            GPIO.add_event_detect(
-                self.config.gpio_mpu_int_pin,
-                GPIO.RISING,
-                callback=self._on_mpu_int,
-                bouncetime=50,
-            )
 
     def teardown(self) -> None:
         try:
@@ -495,26 +457,6 @@ class GpioHandlers:
                 {"gpio_pin": channel, "level": "HIGH"},
             ))
 
-    def _on_mpu_int(self, channel: int) -> None:
-        if self.mpu is None:
-            return
-        try:
-            status = self.mpu.read_int_status()
-            x, y, z = self.mpu.read_accel_g()
-        except Exception:  # noqa: BLE001
-            LOG.exception("MPU read failed in interrupt handler")
-            return
-        # Bit 6 of INT_STATUS = motion detection.
-        if not (status & 0x40):
-            return
-        self.sender.submit(Alert(
-            AlertType.TAMPER_IMPACT,
-            {
-                "source": "mpu6050",
-                "threshold_mg": DEFAULT_MOT_THR,
-                "accel_g": {"x": round(x, 3), "y": round(y, 3), "z": round(z, 3)},
-            },
-        ))
 
 
 # ---------------------------------------------------------------------------
@@ -674,6 +616,47 @@ class NvmeProbe:
             ))
 
 
+class MotionProbe:
+    """Software motion detection via polled accel delta.
+
+    Compares the current accel vector to the previous reading. If any axis
+    changes by more than threshold_mg (in milligravities) between consecutive
+    polls, fire TAMPER_IMPACT.
+    """
+
+    def __init__(self, config: Config, sender: AlertSender, mpu: MPU6050) -> None:
+        self.config = config
+        self.sender = sender
+        self.mpu = mpu
+        self._prev: Optional[tuple[float, float, float]] = None
+
+    def probe_once(self) -> None:
+        try:
+            x, y, z = self.mpu.read_accel_g()
+        except Exception:  # noqa: BLE001
+            LOG.warning("MPU accel read failed; skipping motion check.")
+            return
+
+        if self._prev is not None:
+            dx = abs(x - self._prev[0])
+            dy = abs(y - self._prev[1])
+            dz = abs(z - self._prev[2])
+            delta_mg = max(dx, dy, dz) * 1000.0
+            threshold = self.config.mpu_accel_threshold_mg
+            if delta_mg >= threshold:
+                self.sender.submit(Alert(
+                    AlertType.TAMPER_IMPACT,
+                    {
+                        "source": "mpu6050",
+                        "threshold_mg": threshold,
+                        "delta_mg": round(delta_mg, 1),
+                        "accel_g": {"x": round(x, 3), "y": round(y, 3), "z": round(z, 3)},
+                        "prev_g": {"x": round(self._prev[0], 3), "y": round(self._prev[1], 3), "z": round(self._prev[2], 3)},
+                    },
+                ))
+        self._prev = (x, y, z)
+
+
 # ---------------------------------------------------------------------------
 # Main loop
 # ---------------------------------------------------------------------------
@@ -717,19 +700,20 @@ def main(argv: Optional[list[str]] = None) -> int:
     mpu: Optional[MPU6050] = None
     try:
         mpu = MPU6050(config.mpu_i2c_bus, config.mpu_i2c_addr)
-        mpu.init_motion_interrupt()
+        mpu.init()
+        x, y, z = mpu.read_accel_g()
         LOG.info(
-            "MPU-6050 ready bus=%d addr=0x%02X thr=%d dur=%dms",
+            "MPU-6050 ready bus=%d addr=0x%02X baseline=(%.3f, %.3f, %.3f)g threshold=%dmg",
             config.mpu_i2c_bus,
             config.mpu_i2c_addr,
-            DEFAULT_MOT_THR,
-            DEFAULT_MOT_DUR,
+            x, y, z,
+            int(config.mpu_accel_threshold_mg),
         )
     except Exception as exc:  # noqa: BLE001
         LOG.error("MPU-6050 init failed; impact alerts disabled: %s", exc)
         mpu = None
 
-    gpio_handlers = GpioHandlers(config, sender, mpu)
+    gpio_handlers = GpioHandlers(config, sender)
     try:
         gpio_handlers.setup()
     except Exception:
@@ -740,6 +724,9 @@ def main(argv: Optional[list[str]] = None) -> int:
     rtsp_probe = RtspProbe(config, sender)
     temp_probe = TemperatureProbe(config, sender)
     nvme_probe = NvmeProbe(config, sender)
+    motion_probe: Optional[MotionProbe] = None
+    if mpu is not None:
+        motion_probe = MotionProbe(config, sender, mpu)
 
     stop_event = threading.Event()
 
@@ -764,9 +751,8 @@ def main(argv: Optional[list[str]] = None) -> int:
             rtsp_probe.probe_once()
             temp_probe.probe_once()
             nvme_probe.probe_once()
-            # Power-voltage check via ADC is intentionally not invoked here:
-            # the Orin Nano dev kit exposes no ADC on J12. Add a Probe and a
-            # call here once a board-level voltage monitor is fitted.
+            if motion_probe is not None:
+                motion_probe.probe_once()
             stop_event.wait(config.poll_interval_sec)
     finally:
         gpio_handlers.teardown()

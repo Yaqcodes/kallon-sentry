@@ -105,7 +105,9 @@ MPU_I2C_BUS=7
 MPU_I2C_ADDR=0x68
 GPIO_REED_PIN=31
 GPIO_LDR_PIN=33
-GPIO_MPU_INT_PIN=29
+# Motion detection: fire TAMPER_IMPACT if any accel axis changes by this
+# much (milligravities) between consecutive polls. 150mg catches a lift/drop.
+MPU_ACCEL_THRESHOLD_MG=150
 
 # Disabled on the current bench unit. Flip to 1 once hardware is installed.
 ENABLE_NVME=0
