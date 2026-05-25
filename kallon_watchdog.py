@@ -611,8 +611,9 @@ class TemperatureProbe:
             if not temp_file.exists():
                 continue
             try:
-                millideg = int(temp_file.read_text().strip())
-            except (OSError, ValueError):
+                raw = temp_file.read_text().strip()
+                millideg = int(raw)
+            except (OSError, ValueError, TypeError):
                 continue
             celsius = millideg / 1000.0
             if hottest is None or celsius > hottest[1]:
