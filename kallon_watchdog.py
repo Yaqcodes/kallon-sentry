@@ -643,7 +643,17 @@ class MotionProbe:
             dz = abs(z - self._prev[2])
             delta_mg = max(dx, dy, dz) * 1000.0
             threshold = self.config.mpu_accel_threshold_mg
+            LOG.info(
+                "motion poll now=(%.3f,%.3f,%.3f)g prev=(%.3f,%.3f,%.3f)g "
+                "delta_mg=%.1f threshold=%.1f",
+                x, y, z, self._prev[0], self._prev[1], self._prev[2],
+                delta_mg, threshold,
+            )
             if delta_mg >= threshold:
+                LOG.info(
+                    "TAMPER_IMPACT triggered delta_mg=%.1f threshold=%.1f",
+                    delta_mg, threshold,
+                )
                 self.sender.submit(Alert(
                     AlertType.TAMPER_IMPACT,
                     {
@@ -654,6 +664,8 @@ class MotionProbe:
                         "prev_g": {"x": round(self._prev[0], 3), "y": round(self._prev[1], 3), "z": round(self._prev[2], 3)},
                     },
                 ))
+        else:
+            LOG.info("motion poll first reading=(%.3f,%.3f,%.3f)g", x, y, z)
         self._prev = (x, y, z)
 
 
