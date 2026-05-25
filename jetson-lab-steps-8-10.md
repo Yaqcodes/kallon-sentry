@@ -304,7 +304,8 @@ Or VLC → Open Network Stream → same URL.
 Host firewall on Jetson — RTSP only from `wg0`:
 
 ```bash
-sudo iptables -A INPUT -i wg0 -p tcp --dport 8554 -j ACCEP
+sudo iptables -A INPUT -i wg0 -p tcp --dport 8554 -j ACCEPT
+sudo iptables -A INPUT -p tcp --dport 8554 -j DROP
 ```
 
 Persist with `iptables-persistent` or netfilter rules in your image. Full “off-VPN cannot see stream” sign-off needs the managed switch + ACL design from the sovereign stack brief.
