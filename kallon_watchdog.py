@@ -322,6 +322,8 @@ class AlertSender:
 
 MPU_PWR_MGMT_1 = 0x6B
 MPU_ACCEL_XOUT_H = 0x3B
+_MPU_CYCLE_BIT = 0x20  # bit 5 of PWR_MGMT_1: low-power cycle mode
+_MPU_SLEEP_BIT = 0x40  # bit 6 of PWR_MGMT_1
 
 
 class MPU6050:
@@ -336,20 +338,34 @@ class MPU6050:
         self._bus = SMBus(bus_num)
         self._addr = address
 
+    def _wake(self) -> None:
+        self._bus.write_byte_data(self._addr, MPU_PWR_MGMT_1, 0x00)
+        time.sleep(0.05)
+
     def init(self) -> None:
         b = self._bus
         a = self._addr
         b.write_byte_data(a, MPU_PWR_MGMT_1, 0x80)  # reset
         time.sleep(0.1)
-        b.write_byte_data(a, MPU_PWR_MGMT_1, 0x00)  # wake, internal clock
-        time.sleep(0.05)
+        self._wake()
+
+    def _ensure_awake(self) -> None:
+        """Re-wake the MPU if it slipped into sleep or returned all-zeros."""
+        pwr = self._bus.read_byte_data(self._addr, MPU_PWR_MGMT_1)
+        if pwr & (_MPU_SLEEP_BIT | _MPU_CYCLE_BIT):
+            LOG.warning("MPU in sleep/cycle (PWR_MGMT_1=0x%02X); re-waking", pwr)
+            self._wake()
 
     def read_accel_g(self) -> tuple[float, float, float]:
         raw = self._bus.read_i2c_block_data(self._addr, MPU_ACCEL_XOUT_H, 6)
+        if raw == [0, 0, 0, 0, 0, 0]:
+            LOG.warning("MPU returned all-zero accel; checking power state")
+            self._ensure_awake()
+            time.sleep(0.02)
+            raw = self._bus.read_i2c_block_data(self._addr, MPU_ACCEL_XOUT_H, 6)
         def s16(hi: int, lo: int) -> int:
             v = (hi << 8) | lo
             return v - 0x10000 if v & 0x8000 else v
-        # +/-2g full scale -> 16384 LSB/g
         x = s16(raw[0], raw[1]) / 16384.0
         y = s16(raw[2], raw[3]) / 16384.0
         z = s16(raw[4], raw[5]) / 16384.0
