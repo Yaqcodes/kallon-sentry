@@ -1,0 +1,12 @@
+# Oneshot service that runs the WG handshake check. Triggered by
+# kallon-wg-watchdog.timer, not enabled directly.
+#
+#   sudo cp deploy/kallon-wg-watchdog.service.example /etc/systemd/system/kallon-wg-watchdog.service
+#   sudo systemctl daemon-reload
+
+[Unit]
+Description=Restart WireGuard if handshake stale
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/kallon-wg-watchdog.sh

@@ -1,0 +1,25 @@
+# Pin the camera IP to the wired Ethernet interface so the OS never tries to
+# reach it over WiFi (which would defeat the camera-VLAN model once the
+# managed switch arrives). Oneshot, ran at boot.
+#
+# Edit the interface name (enP8p1s0 on Orin Nano) and the Jetson-side address
+# you want on the camera segment before installing.
+#
+#   sudo cp deploy/kallon-camera-route.service.example /etc/systemd/system/kallon-camera-route.service
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now kallon-camera-route.service
+
+[Unit]
+Description=Route camera IP via direct Ethernet
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStartPre=/sbin/ip link set enP8p1s0 up
+ExecStart=/sbin/ip addr replace 192.168.1.10/24 dev enP8p1s0
+ExecStart=/sbin/ip route replace 192.168.1.108/32 dev enP8p1s0
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,21 @@
+# systemd unit for the mediamtx RTSP rebroadcast daemon. Run after WireGuard
+# so the service binds correctly on wg0 if you choose to scope rtspAddress.
+#
+#   curl -L https://github.com/bluenviron/mediamtx/releases/latest/download/mediamtx_linux_arm64v8.tar.gz | sudo tar -xz -C /usr/local/bin/ mediamtx
+#   sudo cp deploy/mediamtx.yml.example     /etc/mediamtx.yml          # then edit the cam password
+#   sudo cp deploy/mediamtx.service.example /etc/systemd/system/mediamtx.service
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now mediamtx.service
+
+[Unit]
+Description=mediamtx RTSP server
+After=network-online.target wg-quick@wg0.service
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/local/bin/mediamtx /etc/mediamtx.yml
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

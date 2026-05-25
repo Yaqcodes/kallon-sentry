@@ -1,0 +1,26 @@
+# VPS systemd unit for the NOC alert listener.
+# Install on the VPS:
+#
+#   sudo cp kallon-alert-listener.service.example /etc/systemd/system/kallon-alert-listener.service
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now kallon-alert-listener
+#   sudo journalctl -u kallon-alert-listener -f
+#
+
+[Unit]
+Description=Kallon NOC alert listener (HMAC verifier)
+After=network-online.target wg-quick@wg0.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 -u /home/ubuntu/kallon-noc/alert_listener.py
+Restart=on-failure
+RestartSec=3
+
+# Hardening
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

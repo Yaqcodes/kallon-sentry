@@ -1,0 +1,14 @@
+# systemd drop-in for wg-quick@wg0 on JetPack 6.x (Tegra), where the kernel
+# does not ship the in-tree WireGuard module. Forces wg-quick to use the
+# userspace implementation provided by the `wireguard` (wireguard-go) binary.
+#
+#   sudo install -d /etc/systemd/system/wg-quick@wg0.service.d
+#   sudo cp deploy/wg-quick-wg0-userspace.conf.example /etc/systemd/system/wg-quick@wg0.service.d/userspace.conf
+#   sudo systemctl daemon-reload
+#   sudo systemctl restart wg-quick@wg0
+#
+# On a kernel that DOES have WireGuard built in (most x86_64 cloud images), do
+# NOT install this drop-in.
+
+[Service]
+Environment=WG_QUICK_USERSPACE_IMPLEMENTATION=/usr/bin/wireguard

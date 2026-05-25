@@ -1,0 +1,15 @@
+# Timer that fires kallon-wg-watchdog.service every 30 s.
+#
+#   sudo cp deploy/kallon-wg-watchdog.timer.example /etc/systemd/system/kallon-wg-watchdog.timer
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now kallon-wg-watchdog.timer
+
+[Unit]
+Description=Check WireGuard handshake every 30s
+
+[Timer]
+OnBootSec=30
+OnUnitActiveSec=30
+
+[Install]
+WantedBy=timers.target
