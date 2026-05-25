@@ -611,7 +611,9 @@ class TemperatureProbe:
             if not temp_file.exists():
                 continue
             try:
-                raw = temp_file.read_text().strip()
+                raw = temp_file.read_bytes().strip()
+                if not raw:
+                    continue
                 millideg = int(raw)
             except (OSError, ValueError, TypeError):
                 continue
