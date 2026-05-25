@@ -553,11 +553,11 @@ class TemperatureProbe:
             if not temp_file.exists():
                 continue
             try:
-                raw = temp_file.read_bytes().strip()
-                if not raw:
+                raw = temp_file.read_bytes()
+                if raw is None or not raw.strip():
                     continue
-                millideg = int(raw)
-            except (OSError, ValueError, TypeError):
+                millideg = int(raw.strip())
+            except Exception:  # noqa: BLE001
                 continue
             celsius = millideg / 1000.0
             if hottest is None or celsius > hottest[1]:
@@ -748,11 +748,18 @@ def main(argv: Optional[list[str]] = None) -> int:
     LOG.info("entering poll loop interval=%.1fs", config.poll_interval_sec)
     try:
         while not stop_event.is_set():
-            rtsp_probe.probe_once()
-            temp_probe.probe_once()
-            nvme_probe.probe_once()
-            if motion_probe is not None:
-                motion_probe.probe_once()
+            for probe_name, probe_fn in [
+                ("rtsp", rtsp_probe.probe_once),
+                ("temp", temp_probe.probe_once),
+                ("nvme", nvme_probe.probe_once),
+                ("motion", motion_probe.probe_once if motion_probe else None),
+            ]:
+                if probe_fn is None:
+                    continue
+                try:
+                    probe_fn()
+                except Exception:  # noqa: BLE001
+                    LOG.exception("probe %s crashed; continuing", probe_name)
             stop_event.wait(config.poll_interval_sec)
     finally:
         gpio_handlers.teardown()
