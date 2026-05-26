@@ -384,11 +384,12 @@ class MPU6050:
 
 
 class GpioHandlers:
-    """Reed switch and LDR — edge-triggered via Jetson.GPIO."""
+    """Reed switch, LDR, and MPU INT — edge-triggered via Jetson.GPIO."""
 
     def __init__(self, config: Config, sender: AlertSender) -> None:
         self.config = config
         self.sender = sender
+        # State for recovered alerts. None = not yet known.
         self._door_open: Optional[bool] = None
         self._light_bright: Optional[bool] = None
         import Jetson.GPIO as GPIO  # noqa: WPS433
@@ -398,11 +399,11 @@ class GpioHandlers:
         GPIO = self._gpio
         GPIO.setwarnings(False)
         GPIO.setmode(GPIO.BOARD)
-        # Reed: door open = HIGH, door closed = LOW. 330 Ω external pull-up to 3V3.
+        # Reed: door open = HIGH, door closed = LOW. External pull-up to 3V3 already on board.
         GPIO.setup(self.config.gpio_reed_pin, GPIO.IN)
         # LDR: active-low module — bright = LOW, dark = HIGH.
         GPIO.setup(self.config.gpio_ldr_pin, GPIO.IN)
-
+        # Seed initial states so we only alert on real transitions.
         self._door_open = GPIO.input(self.config.gpio_reed_pin) == GPIO.HIGH
         self._light_bright = GPIO.input(self.config.gpio_ldr_pin) == GPIO.LOW
         LOG.info(
@@ -410,7 +411,7 @@ class GpioHandlers:
             self._door_open,
             self._light_bright,
         )
-
+        # If we boot with door open or cover off, fire one alert immediately.
         if self._door_open:
             self.sender.submit(Alert(
                 AlertType.TAMPER_DOOR_OPEN,
@@ -441,6 +442,7 @@ class GpioHandlers:
         except Exception:  # noqa: BLE001
             pass
 
+    # Callbacks run on a background thread inside Jetson.GPIO.
     def _on_reed(self, channel: int) -> None:
         is_high = self._gpio.input(channel) == self._gpio.HIGH
         if is_high and self._door_open is not True:
