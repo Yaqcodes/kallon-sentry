@@ -384,7 +384,7 @@ class MPU6050:
 
 
 class GpioHandlers:
-    """LDR edge-triggered via Jetson.GPIO; reed switch polled to avoid cdev bias bug."""
+    """Reed switch and LDR — edge-triggered via Jetson.GPIO."""
 
     def __init__(self, config: Config, sender: AlertSender) -> None:
         self.config = config
@@ -398,12 +398,9 @@ class GpioHandlers:
         GPIO = self._gpio
         GPIO.setwarnings(False)
         GPIO.setmode(GPIO.BOARD)
-        # Reed: door open = HIGH, door closed = LOW. External pull-up to 3V3.
-        # Polled (not edge-detected) — add_event_detect on the cdev backend
-        # corrupts the line bias after the first edge, dragging the pin to ~1.1V.
+        # Reed: door open = HIGH, door closed = LOW. 330 Ω external pull-up to 3V3.
         GPIO.setup(self.config.gpio_reed_pin, GPIO.IN)
         # LDR: active-low module — bright = LOW, dark = HIGH.
-        # Edge detection is fine here because the module actively drives the line.
         GPIO.setup(self.config.gpio_ldr_pin, GPIO.IN)
 
         self._door_open = GPIO.input(self.config.gpio_reed_pin) == GPIO.HIGH
@@ -426,6 +423,12 @@ class GpioHandlers:
             ))
 
         GPIO.add_event_detect(
+            self.config.gpio_reed_pin,
+            GPIO.BOTH,
+            callback=self._on_reed,
+            bouncetime=50,
+        )
+        GPIO.add_event_detect(
             self.config.gpio_ldr_pin,
             GPIO.BOTH,
             callback=self._on_ldr,
@@ -438,20 +441,19 @@ class GpioHandlers:
         except Exception:  # noqa: BLE001
             pass
 
-    def poll_reed(self) -> None:
-        """Called from the main poll loop. Checks reed state and fires alerts on transitions."""
-        is_high = self._gpio.input(self.config.gpio_reed_pin) == self._gpio.HIGH
+    def _on_reed(self, channel: int) -> None:
+        is_high = self._gpio.input(channel) == self._gpio.HIGH
         if is_high and self._door_open is not True:
             self._door_open = True
             self.sender.submit(Alert(
                 AlertType.TAMPER_DOOR_OPEN,
-                {"gpio_pin": self.config.gpio_reed_pin, "level": "HIGH"},
+                {"gpio_pin": channel, "level": "HIGH"},
             ))
         elif not is_high and self._door_open is not False:
             self._door_open = False
             self.sender.submit(Alert(
                 AlertType.TAMPER_DOOR_RECOVERED,
-                {"gpio_pin": self.config.gpio_reed_pin, "level": "LOW"},
+                {"gpio_pin": channel, "level": "LOW"},
             ))
 
     def _on_ldr(self, channel: int) -> None:
@@ -773,7 +775,6 @@ def main(argv: Optional[list[str]] = None) -> int:
     try:
         while not stop_event.is_set():
             for probe_name, probe_fn in [
-                ("reed", gpio_handlers.poll_reed),
                 ("rtsp", rtsp_probe.probe_once),
                 ("temp", temp_probe.probe_once),
                 ("nvme", nvme_probe.probe_once),
