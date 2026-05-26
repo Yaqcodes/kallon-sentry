@@ -384,12 +384,11 @@ class MPU6050:
 
 
 class GpioHandlers:
-    """Reed switch, LDR, and MPU INT — edge-triggered via Jetson.GPIO."""
+    """LDR edge-triggered via Jetson.GPIO; reed switch polled to avoid cdev bias bug."""
 
     def __init__(self, config: Config, sender: AlertSender) -> None:
         self.config = config
         self.sender = sender
-        # State for recovered alerts. None = not yet known.
         self._door_open: Optional[bool] = None
         self._light_bright: Optional[bool] = None
         import Jetson.GPIO as GPIO  # noqa: WPS433
@@ -399,11 +398,14 @@ class GpioHandlers:
         GPIO = self._gpio
         GPIO.setwarnings(False)
         GPIO.setmode(GPIO.BOARD)
-        # Reed: door open = HIGH, door closed = LOW. External pull-up to 3V3 already on board.
+        # Reed: door open = HIGH, door closed = LOW. External pull-up to 3V3.
+        # Polled (not edge-detected) — add_event_detect on the cdev backend
+        # corrupts the line bias after the first edge, dragging the pin to ~1.1V.
         GPIO.setup(self.config.gpio_reed_pin, GPIO.IN)
         # LDR: active-low module — bright = LOW, dark = HIGH.
+        # Edge detection is fine here because the module actively drives the line.
         GPIO.setup(self.config.gpio_ldr_pin, GPIO.IN)
-        # Seed initial states so we only alert on real transitions.
+
         self._door_open = GPIO.input(self.config.gpio_reed_pin) == GPIO.HIGH
         self._light_bright = GPIO.input(self.config.gpio_ldr_pin) == GPIO.LOW
         LOG.info(
@@ -411,7 +413,7 @@ class GpioHandlers:
             self._door_open,
             self._light_bright,
         )
-        # If we boot with door open or cover off, fire one alert immediately.
+
         if self._door_open:
             self.sender.submit(Alert(
                 AlertType.TAMPER_DOOR_OPEN,
@@ -423,12 +425,6 @@ class GpioHandlers:
                 {"gpio_pin": self.config.gpio_ldr_pin, "level": "LOW", "boot_state": True},
             ))
 
-        GPIO.add_event_detect(
-            self.config.gpio_reed_pin,
-            GPIO.BOTH,
-            callback=self._on_reed,
-            bouncetime=50,
-        )
         GPIO.add_event_detect(
             self.config.gpio_ldr_pin,
             GPIO.BOTH,
@@ -442,20 +438,20 @@ class GpioHandlers:
         except Exception:  # noqa: BLE001
             pass
 
-    # Callbacks run on a background thread inside Jetson.GPIO.
-    def _on_reed(self, channel: int) -> None:
-        is_high = self._gpio.input(channel) == self._gpio.HIGH
+    def poll_reed(self) -> None:
+        """Called from the main poll loop. Checks reed state and fires alerts on transitions."""
+        is_high = self._gpio.input(self.config.gpio_reed_pin) == self._gpio.HIGH
         if is_high and self._door_open is not True:
             self._door_open = True
             self.sender.submit(Alert(
                 AlertType.TAMPER_DOOR_OPEN,
-                {"gpio_pin": channel, "level": "HIGH"},
+                {"gpio_pin": self.config.gpio_reed_pin, "level": "HIGH"},
             ))
         elif not is_high and self._door_open is not False:
             self._door_open = False
             self.sender.submit(Alert(
                 AlertType.TAMPER_DOOR_RECOVERED,
-                {"gpio_pin": channel, "level": "LOW"},
+                {"gpio_pin": self.config.gpio_reed_pin, "level": "LOW"},
             ))
 
     def _on_ldr(self, channel: int) -> None:
@@ -777,6 +773,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     try:
         while not stop_event.is_set():
             for probe_name, probe_fn in [
+                ("reed", gpio_handlers.poll_reed),
                 ("rtsp", rtsp_probe.probe_once),
                 ("temp", temp_probe.probe_once),
                 ("nvme", nvme_probe.probe_once),
