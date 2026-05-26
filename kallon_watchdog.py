@@ -400,9 +400,9 @@ class GpioHandlers:
         GPIO.setwarnings(False)
         GPIO.setmode(GPIO.BOARD)
         # Reed: door open = HIGH, door closed = LOW. External pull-up to 3V3 already on board.
-        GPIO.setup(self.config.gpio_reed_pin, GPIO.IN)
+        GPIO.setup(self.config.gpio_reed_pin, GPIO.IN, pull_up_down=GPIO.PUD_OFF)
         # LDR: active-low module — bright = LOW, dark = HIGH.
-        GPIO.setup(self.config.gpio_ldr_pin, GPIO.IN)
+        GPIO.setup(self.config.gpio_ldr_pin, GPIO.IN, pull_up_down=GPIO.PUD_OFF)
         # Seed initial states so we only alert on real transitions.
         self._door_open = GPIO.input(self.config.gpio_reed_pin) == GPIO.HIGH
         self._light_bright = GPIO.input(self.config.gpio_ldr_pin) == GPIO.LOW
