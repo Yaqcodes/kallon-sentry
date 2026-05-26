@@ -18,7 +18,7 @@ Wants=network-online.target
 Type=oneshot
 RemainAfterExit=yes
 ExecStartPre=/sbin/ip link set enP8p1s0 up
-ExecStart=/sbin/ip addr replace 192.168.1.10/24 dev enP8p1s0
+ExecStart=/sbin/ip addr replace 192.168.1.10/32 dev enP8p1s0
 ExecStart=/sbin/ip route replace 192.168.1.108/32 dev enP8p1s0
 
 [Install]
