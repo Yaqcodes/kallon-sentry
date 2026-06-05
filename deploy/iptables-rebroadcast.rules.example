@@ -1,0 +1,33 @@
+# deploy/iptables-rebroadcast.rules.example
+#
+# Restrict the mediamtx RTSP rebroadcast (TCP 8554) to loopback and the
+# WireGuard interface only. The camera-facing and WAN interfaces must never
+# expose :8554. Rendered/applied by scripts/install/90-firewall.sh, which
+# substitutes WG_IFACE from /etc/kallon/device.env.
+#
+# Apply manually for reference (90-firewall.sh does this idempotently):
+#   sudo iptables-restore -n < deploy/iptables-rebroadcast.rules.example
+#   sudo netfilter-persistent save
+#
+# NOTE: rules use -I/ordering carefully so SSH on the WAN interface is never cut.
+
+*filter
+:INPUT ACCEPT [0:0]
+:FORWARD ACCEPT [0:0]
+:OUTPUT ACCEPT [0:0]
+
+# --- RTSP rebroadcast (8554/tcp): allow only on lo + wg0, drop everywhere else ---
+# Allow established/related first so existing sessions are never broken.
+-A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+
+# Loopback (local ffprobe / health checks).
+-A INPUT -i lo -p tcp --dport 8554 -j ACCEPT
+
+# WireGuard tunnel (hub / dashboard pulls the stream over the VPN).
+# __WG_IFACE__ is replaced with WG_IFACE (default wg0) by 90-firewall.sh.
+-A INPUT -i __WG_IFACE__ -p tcp --dport 8554 -j ACCEPT
+
+# Everything else hitting 8554 (WAN, camera VLAN) is dropped.
+-A INPUT -p tcp --dport 8554 -j DROP
+
+COMMIT

@@ -1,0 +1,32 @@
+# systemd unit for the Kallon enrollment API (Terra physical server).
+# Runs uvicorn on loopback; Caddy terminates TLS in front of it.
+#
+#   sudo cp kallon-enrollment-api.service.example /etc/systemd/system/kallon-enrollment-api.service
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now kallon-enrollment-api
+
+[Unit]
+Description=Kallon enrollment API (FastAPI/uvicorn)
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=kallon
+Group=kallon
+WorkingDirectory=/opt/kallon/infra/enrollment-api
+EnvironmentFile=/etc/kallon/enrollment-api.env
+# enrollment-api.env provides:
+#   DATABASE_URL=postgresql://kallon:...@127.0.0.1:5432/kallon
+#   KALLON_REGISTRY=postgres
+#   ENROLLMENT_HMAC_KEY=<service secret>     (optional but recommended)
+#   KALLON_PEER_BACKEND=subprocess           (or noop)
+#   KALLON_ADDPEER_CMD=...                    (if subprocess)
+ExecStart=/opt/kallon/venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

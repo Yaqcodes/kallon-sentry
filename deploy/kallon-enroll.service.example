@@ -1,0 +1,24 @@
+# One-shot first-boot enrollment for the Jetson. Runs kallon-enroll.sh once;
+# the script touches /etc/kallon/.enrolled on success so this unit no-ops after.
+#
+#   sudo cp deploy/kallon-enroll.service.example /etc/systemd/system/kallon-enroll.service
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable kallon-enroll.service   # runs on next boot
+#
+# The script retries internally (MAX_TRIES with backoff), so a transient network
+# outage at boot eventually succeeds without a unit-level restart loop.
+
+[Unit]
+Description=Kallon first-boot enrollment
+After=network-online.target
+Wants=network-online.target
+# Skip entirely once enrolled.
+ConditionPathExists=!/etc/kallon/.enrolled
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/opt/kallon/scripts/kallon-enroll.sh --env /etc/kallon/device.env
+
+[Install]
+WantedBy=multi-user.target

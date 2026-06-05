@@ -1,0 +1,21 @@
+# Caddyfile.example — TLS termination + reverse proxy for the enrollment API.
+# Caddy obtains/renews Let's Encrypt certs automatically. The FastAPI app runs
+# on loopback only; Caddy is the sole public listener.
+#
+#   sudo cp Caddyfile.example /etc/caddy/Caddyfile   # edit the hostname
+#   sudo systemctl reload caddy
+
+enroll.terra.example {
+    encode gzip
+    reverse_proxy 127.0.0.1:8000
+
+    # Basic hardening: only the enrollment routes are public.
+    @blocked not path /v1/* /healthz
+    respond @blocked 404
+
+    header {
+        Strict-Transport-Security "max-age=31536000;"
+        X-Content-Type-Options "nosniff"
+        -Server
+    }
+}
