@@ -1,0 +1,2 @@
+# Shell scripts run on Linux hubs — must stay LF (CRLF breaks bash: set -o pipefail).
+*.sh text eol=lf

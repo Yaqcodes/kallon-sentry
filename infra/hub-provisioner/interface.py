@@ -99,6 +99,17 @@ def _scp(host: HubHost, src: Path, dst: str) -> None:
     )
 
 
+def _strip_crlf_on_hub(host: HubHost, *remote_paths: str) -> None:
+    """Windows git checkouts often use CRLF; bash on Ubuntu rejects 'pipefail\\r'."""
+    if not remote_paths:
+        return
+    quoted = " ".join(shlex.quote(p) for p in remote_paths)
+    subprocess.run(
+        [*_ssh_base(host), f"for f in {quoted}; do sed -i 's/\\r$//' \"$f\"; done"],
+        check=True, timeout=60,
+    )
+
+
 def run_gateway_init(
     host: HubHost,
     *,
@@ -140,11 +151,16 @@ def run_gateway_init(
     _scp(host, GATEWAY_INIT, "/tmp/kallon-gateway-init.sh")
     if ops_pubkey_file and Path(ops_pubkey_file).is_file():
         _scp(host, Path(ops_pubkey_file), "/tmp/kallon-ops.pub")
+    staged: list[str] = ["/tmp/kallon-gateway-init.sh"]
+    if ops_pubkey_file and Path(ops_pubkey_file).is_file():
+        staged.append("/tmp/kallon-ops.pub")
     if ALERT_LISTENER.exists():
         _scp(host, ALERT_LISTENER, "/tmp/infra/hub/alert_listener.py")
+        staged.append("/tmp/infra/hub/alert_listener.py")
         # The script resolves the listener via $(dirname $0)/../infra/hub/...
         subprocess.run([*_ssh, "cp /tmp/kallon-gateway-init.sh /tmp/scripts_init.sh 2>/dev/null || true"],
                        check=False, timeout=30)
+    _strip_crlf_on_hub(host, *staged)
     proc = subprocess.run([*_ssh, remote_cmd], capture_output=True, text=True, timeout=600)
     if proc.returncode != 0:
         raise RuntimeError(f"gateway-init failed: {proc.stderr.strip()}")
