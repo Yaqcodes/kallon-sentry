@@ -246,17 +246,33 @@ On the **Windows Server** (as the user that will run the enrollment API):
 ```powershell
 # One-shot install: copy PEM, fix ACLs, derive .pub, smoke-test SSH
 cd C:\path\to\kallon-sentry\CODE
-.\scripts\install-terra-hub-ops-key.ps1 `
-  -SourcePem "C:\Users\kayob\Documents\Khalifa Projects\Kallon Sentry Tower\kallon-vps-key.pem" `
+
+powershell -ExecutionPolicy Bypass -File .\scripts\install-terra-hub-ops-key.ps1 `
+  -SourcePem "C:\path\to\kallon-vps-key.pem" `
   -HubHost 18.220.75.237
+
+# Re-run ACL/.pub fix only (if terra-hub-ops.pem already exists):
+# powershell -ExecutionPolicy Bypass -File .\scripts\install-terra-hub-ops-key.ps1 -Repair
 
 # Set for this PowerShell session (hub-provisioner + enrollment API)
 $env:KALLON_OPS_SSH_IDENTITY_FILE = "C:\kallon\secrets\terra-hub-ops.pem"
 $env:KALLON_OPS_SSH_PUBKEY_FILE = "C:\kallon\secrets\terra-hub-ops.pub"
 
-# Diagnose if anything still fails
-.\scripts\kallon-hub-ssh-verify.ps1 -HubHost 18.220.75.237
+powershell -ExecutionPolicy Bypass -File .\scripts\kallon-hub-ssh-verify.ps1 -HubHost 18.220.75.237
 ```
+
+> **`-SourcePem`:** your **original** Lightsail PEM (`kallon-vps-key.pem`), **not**
+> `C:\kallon\secrets\terra-hub-ops.pem` (copy-to-self error). If already installed,
+> use `-Repair` instead.
+
+> **Verify output:** **Test 1** is what hub-provisioner uses — if it passes, proceed
+> to §8. **Test 2** (plain `ssh`) is optional; failure means fix `~/.ssh/config`
+> (`Host *` IdentityFile), not a blocker for production.
+
+These `.ps1` helpers are **optional** conveniences for Path P (Windows control plane).
+They are not required for production logic — hub-provisioner and the enrollment API
+only need the files at `C:\kallon\secrets\` and env vars. Linux control plane: see
+`docs/field-test-setup.md` §6 (`chmod 600`, same env var names).
 
 Manual equivalent (if you cannot run the script):
 
@@ -336,14 +352,14 @@ For hub-provisioner and the enrollment API, **`KALLON_OPS_SSH_IDENTITY_FILE` is 
 (Python subprocesses do not reliably read `~/.ssh/config` on Windows). Always verify with:
 
 ```powershell
-.\scripts\kallon-hub-ssh-verify.ps1 -HubHost 18.220.75.237
+powershell -ExecutionPolicy Bypass -File .\scripts\kallon-hub-ssh-verify.ps1 -HubHost 18.220.75.237
 ```
 
 **Permission denied?** Usually one of:
 
 | Symptom | Fix |
 |---------|-----|
-| `UNPROTECTED PRIVATE KEY FILE` | Re-run `install-terra-hub-ops-key.ps1` (user-only ACL on `.pem`) |
+| `UNPROTECTED PRIVATE KEY FILE` | Re-run install script or manual icacls steps (user-only ACL on `.pem`) |
 | Plain `ssh ubuntu@…` fails but `-i …\terra-hub-ops.pem` works | Remove `Host *` `IdentityFile` from `~/.ssh/config` |
 | Hub-provisioner fails, interactive ssh works | Set `$env:KALLON_OPS_SSH_IDENTITY_FILE` to the **`.pem`**, not `.pub` |
 | Env var set but file missing | Copy PEM to `C:\kallon\secrets\terra-hub-ops.pem` |
