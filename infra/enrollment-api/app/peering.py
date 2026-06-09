@@ -3,11 +3,12 @@
 When a tower enrolls, its WireGuard public key must become a peer on the
 customer hub. This module isolates *how* that happens so the API stays testable:
 
-  * subprocess (default): runs scripts/kallon-gateway-add-peer.sh against the
-    customer's gateway host (set via KALLON_ADDPEER_CMD).
-  * noop: record-only (manual peer add); used for tests / Option C bring-up.
+  * subprocess (production): runs scripts/kallon-gateway-add-peer.sh against the
+    customer's gateway host (set via KALLON_ADDPEER_CMD). Required on Path P.
+  * noop (lab/tests only): record-only; operator adds peers manually.
 
-Selected by KALLON_PEER_BACKEND = subprocess | noop.
+Selected by KALLON_PEER_BACKEND = subprocess | noop (defaults to noop if unset —
+production must set subprocess explicitly).
 """
 from __future__ import annotations
 

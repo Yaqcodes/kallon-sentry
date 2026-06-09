@@ -66,7 +66,11 @@ if [[ -z "$GATEWAY_HOST" || "$GATEWAY_HOST" == "localhost" || "$GATEWAY_HOST" ==
   [[ ${EUID:-$(id -u)} -eq 0 ]] || die "local peer-add must run as root."
   bash -c "$(remote_script)" _ "$PUBKEY" "$VPN_IP" "$DEVICE_ID" "$WG_IFACE"
 else
-  ssh -o StrictHostKeyChecking=accept-new "${SSH_USER}@${GATEWAY_HOST}" \
+  SSH_IDENTITY=()
+  if [[ -n "${KALLON_OPS_SSH_IDENTITY_FILE:-}" && -f "${KALLON_OPS_SSH_IDENTITY_FILE}" ]]; then
+    SSH_IDENTITY=(-i "$KALLON_OPS_SSH_IDENTITY_FILE" -o IdentitiesOnly=yes -o BatchMode=yes)
+  fi
+  ssh "${SSH_IDENTITY[@]}" -o StrictHostKeyChecking=accept-new "${SSH_USER}@${GATEWAY_HOST}" \
     "sudo bash -s -- '$PUBKEY' '$VPN_IP' '$DEVICE_ID' '$WG_IFACE'" <<REMOTE
 $(remote_script)
 REMOTE

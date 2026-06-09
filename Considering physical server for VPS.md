@@ -97,13 +97,17 @@ All paths produce the same **`gateway_manifest.json`** and registry row. **No AW
 **Suggested layout on the physical server:**
 
 ```text
-Terra physical server
-├── PostgreSQL 16           ← registry (customers, towers, ip_alloc, audit)
-├── enrollment-api          ← FastAPI, TLS via Caddy/nginx
-├── hub-provisioner         ← HubProvider adapters (hetzner, manual, …)
+Terra physical server (Windows Server or Linux)
+├── PostgreSQL 16           ← registry (customers, towers, ip_alloc, audit); localhost only
+├── enrollment-api          ← FastAPI on 127.0.0.1:8000; TLS via Caddy/nginx/IIS
+│                             KALLON_PEER_BACKEND=subprocess → SSH add-peer on customer hub
+├── hub-provisioner         ← HubProvider adapters (lightsail, manual, …)
 ├── (optional) dashboard API / alert ingest
 └── backups: pg_dump + registry export
 ```
+
+**Windows Server:** follow `docs/postgres-windows-server-setup.md` (Path P).
+**Linux:** same contracts; see `docs/field-test-setup.md` §6.
 
 Customer hub VMs (Option B) are small Ubuntu instances elsewhere (1 vCPU, 1 GB RAM is enough for WG + alert listener at pilot scale). Towers reach them over LTE via outbound UDP 51820.
 

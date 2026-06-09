@@ -58,6 +58,26 @@ row-locked in Postgres (`SELECT ... FOR UPDATE`).
 | `confirm_token` | enrollment API per enroll | transient (in-memory on API) | — | **No** |
 | `ENROLLMENT_HMAC_KEY` (service) | `openssl rand -base64 32` | API host `enrollment-api.env`; baked into factory image | `600` | **No** |
 | `DATABASE_URL` | — | API host `enrollment-api.env` | `600` | **No** |
+| **Terra hub-ops SSH** private key | `ssh-keygen` once | Control plane `C:\kallon\secrets\terra-hub-ops.pem` | `600` | **No** |
+| Terra hub-ops SSH public key | derived | Installed on **every** hub at `gateway-init` | `644` | **No** |
+
+### Enrollment API environment (production — Path P)
+
+On the Windows Server, `C:\kallon\config\enrollment-api.env` (or Linux
+`/etc/kallon/enrollment-api.env`) must include:
+
+| Variable | Production value |
+|----------|------------------|
+| `KALLON_REGISTRY` | `postgres` |
+| `DATABASE_URL` | `postgresql://kallon:…@127.0.0.1:5432/kallon` |
+| `KALLON_PEER_BACKEND` | **`subprocess`** (never `noop` in prod) |
+| `KALLON_ADDPEER_CMD` | Template invoking `kallon-gateway-add-peer.sh` — see `docs/postgres-windows-server-setup.md` §7 |
+| `KALLON_OPS_SSH_PUBKEY_FILE` | Path to `terra-hub-ops.pub` — hub provisioner installs on each hub |
+| `KALLON_OPS_SSH_IDENTITY_FILE` | Path to `terra-hub-ops.pem` — **required** for Python `ssh`/`scp` on Windows |
+
+**One ops keypair** serves hub provisioner + enrollment peer-add for **all** customer
+hubs. Not one PEM per VPS. Postgres binds `localhost` only; the API binds
+`127.0.0.1:8000` with TLS on `:443`. Towers use `ENROLLMENT_URL=https://enroll.<domain>/v1`.
 
 ### Key facts
 

@@ -7,6 +7,8 @@ deliverables on the `field-test` branch and maps each one back to the canonical 
 
 | Source of truth | Role |
 |-----------------|------|
+| **`docs/field-test-setup.md`** | **End-to-end setup & test walkthrough** (start here) |
+| **`docs/postgres-windows-server-setup.md`** | **Path P** — Windows Server control plane (Postgres + API + peer-add) |
 | `kallon_sovereign_stack_brief.md` (v2.0) | Why / product intent / exit criteria |
 | `kallon_mass_deployment_roadmap.md` (v2.1) | How we build & ship; §11 deliverables checklist |
 | `Considering physical server for VPS.md` | Control plane layout, hub hosting, vendor lock-in |
@@ -85,7 +87,7 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[H]` hardware-g
 - [x] `deploy/kallon-enroll.service.example` (one-shot; guarded by `/etc/kallon/.enrolled`)
 - [x] `docs/identity-and-secrets.md`
 - [x] Verified: `tests/test_registry.py` (10/10), `tests/test_enrollment_api.py` (two towers enroll→confirm→active)
-- [H] **Exit on prod Postgres:** swap `KALLON_REGISTRY=postgres` + `DATABASE_URL` *(needs the physical server)*
+- [ ] **Exit on prod (Path P):** Windows Server live — Postgres + enrollment API + `subprocess` peer-add + TLS *(see `docs/postgres-windows-server-setup.md` §12)*
 
 ### Workstream C — Hub provisioner + integration contract  → roadmap Phase 3 / §11
 - [x] `infra/hub-provisioner/interface.py` (`HubProvider` + shared `run_gateway_init`)
@@ -127,6 +129,11 @@ Ready-to-run scaffolding for this workstream:
 - A and B interleave; B's enrollment depends on A's `kallon-wg-provision` output shape.
 - C depends on B (registry + enrollment) for automated peer add.
 - D is hardware-gated (switch, then LTE modem) and runs last.
+
+**Production from day 1 (Path P):** Path A tests → `docs/postgres-windows-server-setup.md`
+on Windows Server → first hub = existing Lightsail as `cust_lab` (same ops SSH key,
+Postgres, automated peer-add for all future hubs) → `field-test-setup.md` §5 Jetson.
+Path B is offline dev only — not validation.
 
 ---
 

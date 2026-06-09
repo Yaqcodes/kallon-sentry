@@ -5,6 +5,8 @@ Version 2.0 · June 2026
 
 | Related doc | Role |
 |-------------|------|
+| **`docs/field-test-setup.md`** | End-to-end setup & test walkthrough (field-test branch) |
+| **`docs/postgres-windows-server-setup.md`** | Production control plane on Windows Server |
 | `kallon_mass_deployment_roadmap.md` | Manufacturing, deployment, control plane, installer |
 | `kallon_current_state.md` | Live bench verification (Phases 0–4) |
 | `Considering physical server for VPS.md` | Control plane and hub hosting options |

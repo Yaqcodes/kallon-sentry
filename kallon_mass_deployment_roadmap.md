@@ -4,12 +4,14 @@
 
 | Related doc | Role |
 |-------------|------|
+| **`docs/field-test-setup.md`** | **End-to-end setup & test walkthrough** (field-test branch) |
+| **`docs/postgres-windows-server-setup.md`** | **Production control plane** — Windows Server Postgres + enrollment API |
 | `kallon_sovereign_stack_brief.md` | Product vision, phase exit criteria (v2.0) |
 | `kallon_current_state.md` | Live bench state, verified services, credential inventory |
 | `Considering physical server for VPS.md` | Control plane layout, hub hosting options, vendor lock-in |
-| `jetson-lab-steps-8-10.md` | Phase 3 lab walkthrough |
-| `phase4-setup-guide.md` | Phase 4 tamper / health bring-up |
-| `HOW_TO_USE.md` | ONVIF & PTZ daemon CLI reference |
+| `jetson-lab-steps-8-10.md` | Phase 3 lab walkthrough (legacy) |
+| `phase4-setup-guide.md` | Phase 4 tamper / health bring-up (legacy) |
+| `HOW_TO_USE.md` | ONVIF & PTZ daemon CLI reference (legacy bench path) |
 
 ---
 

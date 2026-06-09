@@ -77,9 +77,19 @@ Prereqs:
 
 ## 4. Adding towers as peers
 
-Normally automatic: the **enrollment API** calls `kallon-gateway-add-peer.sh`
-when a tower first boots (set `KALLON_PEER_BACKEND=subprocess` +
-`KALLON_ADDPEER_CMD`). For pre-provisioned towers, run it by hand:
+**Production:** automatic on every enroll. The **enrollment API** SSHs to the
+customer hub (`{gateway_host}` from the registry) using the **single Terra
+hub-operations key** (`terra-hub-ops.pem` on the control plane). Same key is used
+when `kallon-hub-provision` runs `gateway-init` on a new hub.
+
+At hub bring-up, `kallon-gateway-init.sh --ops-ssh-pubkey-file …` installs
+`terra-hub-ops.pub` into `ubuntu@hub` (set `KALLON_OPS_SSH_PUBKEY_FILE` on the
+control plane). **Not one SSH key per customer VPS.**
+
+See `docs/postgres-windows-server-setup.md` §7. **Do not** use `noop` in production.
+
+**Manual peer add** — disaster recovery only, or towers provisioned before the
+enrollment API existed:
 
 ```bash
 scripts/kallon-gateway-add-peer.sh \

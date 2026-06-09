@@ -13,6 +13,7 @@
 set -euo pipefail
 
 CUSTOMER_ID=""; VPN_SUBNET=""; GATEWAY_IP=""; LISTEN_PORT=51820; PUBLIC_ENDPOINT=""
+OPS_SSH_PUBKEY=""; OPS_SSH_PUBKEY_FILE=""; OPS_SSH_USER="ubuntu"
 ALERT_PORT=8080
 KALLON_DIR=/opt/kallon-hub
 
@@ -28,6 +29,9 @@ while [[ $# -gt 0 ]]; do
     --listen-port)     LISTEN_PORT="$2"; shift 2 ;;
     --public-endpoint) PUBLIC_ENDPOINT="$2"; shift 2 ;;
     --alert-port)      ALERT_PORT="$2"; shift 2 ;;
+    --ops-ssh-pubkey)      OPS_SSH_PUBKEY="$2"; shift 2 ;;
+    --ops-ssh-pubkey-file) OPS_SSH_PUBKEY_FILE="$2"; shift 2 ;;
+    --ops-ssh-user)        OPS_SSH_USER="$2"; shift 2 ;;
     *) die "unknown arg: $1" ;;
   esac
 done
@@ -51,6 +55,23 @@ export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
 apt-get install -y -qq wireguard-tools ufw python3 >/dev/null
 ok "packages installed"
+
+# 1b. Terra control-plane ops SSH key (one pubkey for all hubs; idempotent) ----
+if [[ -n "$OPS_SSH_PUBKEY_FILE" && -f "$OPS_SSH_PUBKEY_FILE" ]]; then
+  OPS_SSH_PUBKEY="$(head -1 "$OPS_SSH_PUBKEY_FILE")"
+fi
+if [[ -n "$OPS_SSH_PUBKEY" ]]; then
+  homedir="$(getent passwd "$OPS_SSH_USER" | cut -d: -f6 || true)"
+  [[ -n "$homedir" ]] || die "user $OPS_SSH_USER not found (cannot install ops SSH pubkey)"
+  install -d -m 0700 "$homedir/.ssh"
+  touch "$homedir/.ssh/authorized_keys"
+  if ! grep -qF "$OPS_SSH_PUBKEY" "$homedir/.ssh/authorized_keys"; then
+    echo "$OPS_SSH_PUBKEY" >> "$homedir/.ssh/authorized_keys"
+  fi
+  chown -R "$OPS_SSH_USER:$OPS_SSH_USER" "$homedir/.ssh"
+  chmod 600 "$homedir/.ssh/authorized_keys"
+  ok "Terra ops SSH pubkey installed for ${OPS_SSH_USER} (enrollment peer-add)"
+fi
 
 # 2. gateway keypair -----------------------------------------------------------
 install -d -m 0700 /etc/wireguard

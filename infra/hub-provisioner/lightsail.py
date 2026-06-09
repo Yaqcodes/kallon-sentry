@@ -16,9 +16,9 @@ except ImportError:  # pragma: no cover
     boto3 = None  # type: ignore
 
 try:
-    from .interface import HubHost, HubProvider
+    from .interface import HubHost, HubProvider, ssh_identity_args
 except ImportError:  # pragma: no cover
-    from interface import HubHost, HubProvider  # type: ignore
+    from interface import HubHost, HubProvider, ssh_identity_args  # type: ignore
 
 
 class LightsailProvider(HubProvider):
@@ -87,7 +87,8 @@ class LightsailProvider(HubProvider):
         for _ in range(30):
             r = subprocess.run(
                 ["ssh", "-o", "StrictHostKeyChecking=accept-new",
-                 "-o", "ConnectTimeout=5", f"{user}@{host}", "true"],
+                 "-o", "ConnectTimeout=5", *ssh_identity_args(),
+                 f"{user}@{host}", "true"],
                 capture_output=True,
             )
             if r.returncode == 0:
