@@ -131,6 +131,9 @@ def run_gateway_init(
     )
     if ops_pubkey_file and Path(ops_pubkey_file).is_file():
         remote_cmd += f" --ops-ssh-pubkey-file /tmp/kallon-ops.pub"
+    alert_listener_remote = "/tmp/infra/hub/alert_listener.py"
+    if ALERT_LISTENER.exists():
+        remote_cmd += f" --alert-listener-file {alert_listener_remote}"
     if dry_run:
         scp_files = [str(GATEWAY_INIT), str(ALERT_LISTENER)]
         if ops_pubkey_file and Path(ops_pubkey_file).is_file():
@@ -155,11 +158,8 @@ def run_gateway_init(
     if ops_pubkey_file and Path(ops_pubkey_file).is_file():
         staged.append("/tmp/kallon-ops.pub")
     if ALERT_LISTENER.exists():
-        _scp(host, ALERT_LISTENER, "/tmp/infra/hub/alert_listener.py")
-        staged.append("/tmp/infra/hub/alert_listener.py")
-        # The script resolves the listener via $(dirname $0)/../infra/hub/...
-        subprocess.run([*_ssh, "cp /tmp/kallon-gateway-init.sh /tmp/scripts_init.sh 2>/dev/null || true"],
-                       check=False, timeout=30)
+        _scp(host, ALERT_LISTENER, alert_listener_remote)
+        staged.append(alert_listener_remote)
     _strip_crlf_on_hub(host, *staged)
     proc = subprocess.run([*_ssh, remote_cmd], capture_output=True, text=True, timeout=600)
     if proc.returncode != 0:

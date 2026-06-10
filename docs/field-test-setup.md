@@ -9,6 +9,7 @@ the RTSP + signed-webhook integration surface.
 | Related doc | Role |
 |-------------|------|
 | **`docs/postgres-windows-server-setup.md`** | **Production control plane** — Postgres + enrollment API + automated peer-add |
+| **`docs/order-fulfillment.md`** | **Per-order automation** — `kallon-fulfill-order` (hub + towers + device.env) |
 | `kallon_work_plan.md` | Living task board — what's done vs hardware-gated |
 | `kallon_mass_deployment_roadmap.md` | Architecture reference (Phases 1–4) |
 | `kallon_current_state.md` | **Your live bench** — IPs, keys, services today |
@@ -169,33 +170,30 @@ Towers never talk to Postgres; they call the enrollment API over HTTPS.
 | Step | Doc section | Outcome |
 |------|-------------|---------|
 | Postgres | §1–§5 | Registry on `127.0.0.1`; `init-schema` done |
-| Customer + hub | §6 + hub runbook | `cust_*` `status=active`, hub endpoint/pubkey in registry |
-| Enrollment API | §7 | `subprocess` peer-add; **one** `terra-hub-ops` key for all hubs |
+| Customer + hub | §8 or **fulfill-order** | `cust_*` `status=active`, hub endpoint/pubkey in registry |
+| Enrollment API **service** | §7.3–7.4 | Permanent uvicorn + `enrollment-api.env` (not a manual CMD window) |
 | TLS | §7 + `Caddyfile.example` | `https://enroll.yourdomain.com/v1` |
-| Verify | §12 | Enroll one tower → peer appears on hub **without** manual add-peer |
+| Per-order | **`docs/order-fulfillment.md`** | `kallon-fulfill-order` → `device_*.env` + manifest |
+| Verify | §12 | Enroll one tower → peer on hub **without** manual add-peer |
 
-**Register towers and point Jetson at production:**
+**Per order (recommended — one command):**
 
 ```powershell
-# On Windows Server (after Path P control plane is up)
-$env:KALLON_REGISTRY = "postgres"
-$env:DATABASE_URL = "postgresql://kallon:YOUR_PASSWORD@127.0.0.1:5432/kallon"
+. .\scripts\load-control-plane.ps1
+$env:KALLON_ENROLLMENT_URL = "https://enroll.yourdomain.com/v1"
 
-python -m registry.cli register-tower --slug lab --serial 1
-# Copy _enrollment_token_PLAINTEXT into Jetson device.env
+# Lab: existing Lightsail hub + one tower, two cameras
+python infra/fulfillment/cli.py lab --display-name "Kallon Lab" `
+  --provider manual --host 18.220.75.237 `
+  --towers 1 --cameras 2 --subnet 10.50.0.0/24 `
+  --output-dir C:\kallon\factory\lab
 ```
 
-On the Jetson, set:
+Writes `device_kln_lab_000001.env` and `fulfillment_cust_lab.json`. Copy env to Jetson, then **§5 — Jetson tower bring-up**.
 
-```bash
-ENROLLMENT_URL=https://enroll.yourdomain.com/v1
-ENROLLMENT_TOKEN=enr_<from register-tower>
-```
-
-Then continue with **§5 — Jetson tower bring-up** (device.env, install, enroll, acceptance).
 **Do not** use §5.3 “Add peer on hub” — peer-add is automatic in Path P.
 
-**First hub (your Lightsail box):** `kallon-hub-provision cust_lab --provider manual --host 18.220.75.237` with `KALLON_OPS_SSH_PUBKEY_FILE` set — this *is* production hub #1, not a throwaway lab. Additional customers get new VMs via `--provider lightsail`; same ops key.
+**First hub** = production hub #1 (`cust_lab` on `18.220.75.237`). **New customers** use `--provider lightsail` inside fulfill-order (creates VPS automatically).
 
 ---
 

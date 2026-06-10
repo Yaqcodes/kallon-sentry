@@ -88,7 +88,7 @@ class PostgresRegistry(RegistryProvider):
     def update_customer_hub(self, customer_id: str, **fields) -> Customer:
         allowed = {
             "gateway_id", "gateway_endpoint", "gateway_public_key", "hub_alert_url",
-            "hub_provider", "hub_host_id", "status",
+            "hub_provider", "hub_host_id", "status", "display_name",
         }
         sets = {k: v for k, v in fields.items() if k in allowed and v is not None}
         if sets:

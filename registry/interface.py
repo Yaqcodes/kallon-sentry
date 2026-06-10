@@ -95,6 +95,7 @@ class RegistryProvider(ABC):
         hub_provider: Optional[str] = None,
         hub_host_id: Optional[str] = None,
         status: Optional[str] = None,
+        display_name: Optional[str] = None,
     ) -> Customer: ...
 
     @abstractmethod

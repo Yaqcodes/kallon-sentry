@@ -14,6 +14,7 @@ set -euo pipefail
 
 CUSTOMER_ID=""; VPN_SUBNET=""; GATEWAY_IP=""; LISTEN_PORT=51820; PUBLIC_ENDPOINT=""
 OPS_SSH_PUBKEY=""; OPS_SSH_PUBKEY_FILE=""; OPS_SSH_USER="ubuntu"
+ALERT_LISTENER_FILE=""
 ALERT_PORT=8080
 KALLON_DIR=/opt/kallon-hub
 
@@ -32,6 +33,7 @@ while [[ $# -gt 0 ]]; do
     --ops-ssh-pubkey)      OPS_SSH_PUBKEY="$2"; shift 2 ;;
     --ops-ssh-pubkey-file) OPS_SSH_PUBKEY_FILE="$2"; shift 2 ;;
     --ops-ssh-user)        OPS_SSH_USER="$2"; shift 2 ;;
+    --alert-listener-file) ALERT_LISTENER_FILE="$2"; shift 2 ;;
     *) die "unknown arg: $1" ;;
   esac
 done
@@ -122,8 +124,17 @@ if [[ ! -f /etc/kallon/alert.key ]]; then
   log "generated /etc/kallon/alert.key (copy this SAME value to each tower)."
 fi
 install -d -m 0755 "$KALLON_DIR"
-if [[ -f "$(dirname "$0")/../infra/hub/alert_listener.py" ]]; then
-  install -m 0755 "$(dirname "$0")/../infra/hub/alert_listener.py" "$KALLON_DIR/alert_listener.py"
+_listener_src=""
+if [[ -n "$ALERT_LISTENER_FILE" && -f "$ALERT_LISTENER_FILE" ]]; then
+  _listener_src="$ALERT_LISTENER_FILE"
+else
+  for _c in "$(dirname "$0")/infra/hub/alert_listener.py" \
+            "$(dirname "$0")/../infra/hub/alert_listener.py"; do
+    [[ -f "$_c" ]] && { _listener_src="$_c"; break; }
+  done
+fi
+if [[ -n "$_listener_src" ]]; then
+  install -m 0755 "$_listener_src" "$KALLON_DIR/alert_listener.py"
 fi
 cat > /etc/systemd/system/kallon-alert-listener.service <<EOF
 [Unit]

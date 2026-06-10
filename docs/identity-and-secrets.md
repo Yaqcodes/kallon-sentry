@@ -38,9 +38,9 @@ human-readable companion. Keep them in sync.
 | `x.x.x.2 – .99` | Towers (registry allocator, monotonic) |
 | `x.x.x.100 – .254` | Spare / future |
 
-Subnets are assigned per customer from a master table (`cust_acme → 10.50.0.0/24`,
-`cust_beta → 10.51.0.0/24`). The allocator lives in `ip_allocations` and is
-row-locked in Postgres (`SELECT ... FOR UPDATE`).
+Customer `/24` subnets are assigned at order fulfillment (`registry/subnet.py`:
+`10.50.0.0/24`, `10.51.0.0/24`, …). Tower host IPs inside each subnet are
+allocated at enroll (`ip_allocations.next_host_octet`, row-locked in Postgres).
 
 ---
 

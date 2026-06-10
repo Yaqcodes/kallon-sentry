@@ -81,6 +81,8 @@ def main(argv=None) -> int:
             ))
             reg.audit("customer_created", entity_id=args.customer_id, actor="hub-provision")
         reg.update_customer_hub(args.customer_id, status="pending_hub", hub_provider=args.provider)
+        if args.display_name:
+            reg.update_customer_hub(args.customer_id, display_name=args.display_name)
 
         # 2. provision host
         prov = _provider(args.provider, args.region)

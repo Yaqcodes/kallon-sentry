@@ -14,6 +14,7 @@ on `localhost` only.
 | `Considering physical server for VPS.md` | Control plane layout, exposure rules |
 | `docs/identity-and-secrets.md` | `DATABASE_URL`, enrollment tokens, HMAC keys |
 | `docs/customer-gateway.md` | Hub provision + peer-add contract |
+| `docs/order-fulfillment.md` | Per-order `kallon-fulfill-order` automation |
 
 > **Security:** Postgres must **not** be exposed to the public internet. Bind to
 > `localhost` or a private LAN/ops VPN only. Enrollment API is the factory/tower-facing
@@ -401,61 +402,67 @@ icacls C:\kallon\config\enrollment-api.env /inheritance:r /grant:r "Administrato
 > **Do not** follow `field-test-setup.md` §B5 “Add peer on hub” in production.
 > That section exists only for Path B lab runs with `KALLON_PEER_BACKEND=noop`.
 
-### Run enrollment API (manual test)
+### Run enrollment API (smoke test, then install as service)
+
+**Smoke test** (temporary — stops when you close the window):
 
 ```powershell
+. .\scripts\load-control-plane.ps1
 cd C:\path\to\kallon-sentry\CODE\infra\enrollment-api
-$env:KALLON_REGISTRY = "postgres"
-$env:DATABASE_URL = "postgresql://kallon:YOUR_PASSWORD@127.0.0.1:5432/kallon"
 python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
-Verify:
+Verify: `curl http://127.0.0.1:8000/healthz`
 
-```powershell
-curl http://127.0.0.1:8000/healthz
-```
+**Production:** install uvicorn as a **Windows service** (NSSM recommended) with
+`EnvironmentFile=C:\kallon\config\enrollment-api.env`, `WorkingDirectory=...\infra\enrollment-api`,
+`AppParameters=-m uvicorn app.main:app --host 127.0.0.1 --port 8000`. Reboot and re-check `healthz`.
 
-**Production:** terminate TLS in front (Caddy/nginx). Towers use
-`ENROLLMENT_URL=https://enroll.yourdomain.com/v1` — not cleartext over the internet.
-See `infra/enrollment-api/deploy/Caddyfile.example`.
+Terminate TLS in front (Caddy/nginx on `:443` → `127.0.0.1:8000`). Towers use
+`ENROLLMENT_URL=https://enroll.yourdomain.com/v1` — **HTTPS on the internet**;
+Postgres stays on `localhost` only. See `infra/enrollment-api/deploy/Caddyfile.example`.
+
+| Exposure | Internet? |
+|----------|-----------|
+| `https://enroll.<domain>/v1` | **Yes** — towers enroll over customer WAN |
+| Postgres `:5432` | **No** |
+| uvicorn `:8000` | **No** — loopback; proxy only |
 
 ---
 
-## 8. First customer + hub (`kallon-hub-provision`) — production step
+## 8. First customer + hub — production step
 
-This is where the **first customer org** enters the registry in production. One
-command:
-
-1. **Creates** `cust_lab` in Postgres (if missing) and allocates `10.50.0.0/24`
-2. SSHs to the hub, runs `gateway-init`, installs ops pubkey
-3. Writes hub endpoint/pubkey/alert URL; sets `status=active`
-4. Emits `gateway_manifest_*.json`
-
-You do **not** need a separate `create-customer` (§6) first.
+**Recommended:** use **`kallon-fulfill-order`** (hub + towers + `device.env` in one step).
+See `docs/order-fulfillment.md`.
 
 ```powershell
-$env:KALLON_REGISTRY = "postgres"
-$env:DATABASE_URL = "postgresql://kallon:YOUR_PASSWORD@127.0.0.1:5432/kallon"
-$env:KALLON_OPS_SSH_PUBKEY_FILE = "C:\kallon\secrets\terra-hub-ops.pub"
-$env:KALLON_OPS_SSH_IDENTITY_FILE = "C:\kallon\secrets\terra-hub-ops.pem"
+. .\scripts\load-control-plane.ps1
+$env:KALLON_ENROLLMENT_URL = "https://enroll.yourdomain.com/v1"
 
+python infra/fulfillment/cli.py lab --display-name "Kallon Lab" `
+  --provider manual --host 18.220.75.237 `
+  --towers 1 --cameras 2 --subnet 10.50.0.0/24 `
+  --output-dir C:\kallon\factory\lab
+```
+
+**Hub only** (low-level, same engine):
+
+```powershell
 python infra/hub-provisioner/cli.py cust_lab `
   --provider manual --host 18.220.75.237 --ssh-user ubuntu `
   --subnet 10.50.0.0/24 --display-name "Kallon Lab"
 ```
 
-Your existing Lightsail box is **customer hub #1** on the production architecture —
-not a throwaway lab. After this, `register-tower` (§12 / field-test §5) adds towers
-to `cust_lab`.
+Your existing Lightsail box is **customer hub #1** — not a throwaway lab.
 
-**Additional customers** (same ops key, new subnet):
+**New retail customer** (auto `/24` + new Lightsail VPS):
 
 ```powershell
-python infra/hub-provisioner/cli.py cust_acme `
-  --provider lightsail --region us-east-2 `
-  --subnet 10.51.0.0/24 --display-name "Acme Security"
+python infra/fulfillment/cli.py acme --display-name "Acme Security" `
+  --provider lightsail --region us-east-2 --towers 3 --cameras 2
 ```
+
+Subnets auto-assign: `10.50.0.0/24`, `10.51.0.0/24`, … (`registry/subnet.py`).
 
 Do **not** rely on the registry default without `DATABASE_URL` set.
 
@@ -517,13 +524,12 @@ must share one durable registry.
 - [ ] TLS reverse proxy on `:443` → `ENROLLMENT_URL=https://enroll.yourdomain.com/v1`
 - [ ] Hub alert listener as **systemd** on VPS (not `nohup`)
 
-**Per tower (factory — then zero touch in field):**
+**Per order (factory — one command):**
 
-- [ ] `register-tower` in registry → save `ENROLLMENT_TOKEN` once
-- [ ] Bake `/etc/kallon/device.env` (`DEVICE_ID`, `ENROLLMENT_URL`, `ENROLLMENT_TOKEN`, camera vars)
-- [ ] Copy hub `alert.key` to tower (must match hub HMAC secret)
-- [ ] `kallon-jetson-install.sh` on Jetson
-- [ ] Enable `kallon-enroll.service` (first boot auto-enrolls)
+- [ ] `python infra/fulfillment/cli.py <slug> --display-name "…" --towers N --cameras M …`
+- [ ] Copy each `device_*.env` to Jetson; hub `alert.key` to tower
+- [ ] `kallon-jetson-install.sh` + `kallon-enroll.service`
+- [ ] Ship → first boot auto-enrolls (no manual peer-add)
 
 **Skip in production:**
 
