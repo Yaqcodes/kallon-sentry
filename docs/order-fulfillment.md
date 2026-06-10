@@ -7,6 +7,7 @@ factory/ops runs it when hardware is being prepared.
 
 | Related | Role |
 |---------|------|
+| `docs/order-to-live-feed.md` | **End-to-end narrative** — order → ship → enroll → live feed |
 | `docs/postgres-windows-server-setup.md` | One-time platform bring-up (Postgres, API service, TLS) |
 | `docs/field-test-setup.md` | End-to-end validation |
 | `infra/fulfillment/cli.py` | Implementation |
