@@ -402,9 +402,59 @@ icacls C:\kallon\config\enrollment-api.env /inheritance:r /grant:r "Administrato
 > **Do not** follow `field-test-setup.md` §B5 “Add peer on hub” in production.
 > That section exists only for Path B lab runs with `KALLON_PEER_BACKEND=noop`.
 
-### Run enrollment API (smoke test, then install as service)
+### 7.4 Enrollment API service + public HTTPS
 
-**Smoke test** (temporary — stops when you close the window):
+§7.3 is only the **config file**. This section is how the API runs 24/7 and how
+towers on the public internet reach it.
+
+#### Architecture
+
+```text
+Tower (customer Wi‑Fi / LTE)
+        │  HTTPS :443
+        ▼
+enroll.<your-domain>          ← DNS A record → Windows Server public IP
+        │
+Caddy / nginx (TLS, :443)     ← Let's Encrypt certificate for enroll.<your-domain>
+        │  HTTP 127.0.0.1:8000
+        ▼
+uvicorn (Windows service)     ← reads C:\kallon\config\enrollment-api.env
+        │  localhost :5432
+        ▼
+PostgreSQL                    ← never exposed to internet
+```
+
+| Exposure | Internet? |
+|----------|-----------|
+| `https://enroll.<your-domain>/v1` | **Yes** — towers enroll here |
+| Postgres `:5432` | **No** |
+| uvicorn `:8000` | **No** — bind `127.0.0.1` only |
+
+#### Which domain?
+
+**You choose it.** The repo has no fixed production domain — only placeholders
+(`enroll.terra.example`, `enroll.yourdomain.com`).
+
+Pick a hostname under a domain **you control** (company site, product domain, etc.):
+
+| Piece | Example | Notes |
+|-------|---------|--------|
+| Base domain | `terraindustries.com` | Whatever you already own |
+| Enrollment host | `enroll.terraindustries.com` | **Recommended** — one subdomain for the API |
+| `ENROLLMENT_URL` | `https://enroll.terraindustries.com/v1` | Baked into every tower `device.env` |
+
+Steps:
+
+1. **DNS:** `A` record `enroll` → your Windows Server **public** IP (the IP towers can reach from the internet).
+2. **Firewall:** allow inbound **TCP 443** on the server (Windows Firewall + any edge router).
+3. **TLS:** Caddy or nginx terminates HTTPS for `enroll.<your-domain>` (see `infra/enrollment-api/deploy/Caddyfile.example` — replace `enroll.terra.example` with your hostname).
+4. **Set everywhere:** `KALLON_ENROLLMENT_URL` / `ENROLLMENT_URL` in `enrollment-api.env`, fulfill-order, and factory `device.env`.
+
+Use the **same URL for all customers and towers** — customer binding is in the registry (`device_id` + token), not in the hostname.
+
+**Bench-only shortcut (no public domain yet):** enroll cannot work from a real Jetson on customer Wi‑Fi until HTTPS is public. For lab you can temporarily test with API on loopback and a laptop on the same LAN — production requires the public `enroll.*` URL.
+
+#### Step 1 — Smoke test (temporary)
 
 ```powershell
 . .\scripts\load-control-plane.ps1
@@ -412,21 +462,58 @@ cd C:\path\to\kallon-sentry\CODE\infra\enrollment-api
 python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
-Verify: `curl http://127.0.0.1:8000/healthz`
+Another window: `curl http://127.0.0.1:8000/healthz` → `{"status":"ok"}`
 
-**Production:** install uvicorn as a **Windows service** (NSSM recommended) with
-`EnvironmentFile=C:\kallon\config\enrollment-api.env`, `WorkingDirectory=...\infra\enrollment-api`,
-`AppParameters=-m uvicorn app.main:app --host 127.0.0.1 --port 8000`. Reboot and re-check `healthz`.
+Stop uvicorn when done — this does **not** survive reboot.
 
-Terminate TLS in front (Caddy/nginx on `:443` → `127.0.0.1:8000`). Towers use
-`ENROLLMENT_URL=https://enroll.yourdomain.com/v1` — **HTTPS on the internet**;
-Postgres stays on `localhost` only. See `infra/enrollment-api/deploy/Caddyfile.example`.
+#### Step 2 — Install uvicorn as a Windows service (NSSM)
 
-| Exposure | Internet? |
-|----------|-----------|
-| `https://enroll.<domain>/v1` | **Yes** — towers enroll over customer WAN |
-| Postgres `:5432` | **No** |
-| uvicorn `:8000` | **No** — loopback; proxy only |
+1. Download [NSSM](https://nssm.cc/download) and extract `nssm.exe`.
+2. Install the service (run as Administrator; adjust paths):
+
+```powershell
+$nssm = "C:\path\to\nssm.exe"
+$python = (Get-Command python).Source
+$repo = "C:\Users\Artemis\Documents\kallon-sentry"
+
+& $nssm install kallon-enrollment-api $python "-m" "uvicorn" "app.main:app" "--host" "127.0.0.1" "--port" "8000"
+& $nssm set kallon-enrollment-api AppDirectory "$repo\infra\enrollment-api"
+& $nssm set kallon-enrollment-api AppEnvironmentExtra "KALLON_REGISTRY=postgres" "DATABASE_URL=postgresql://kallon:PASSWORD@127.0.0.1:5432/kallon"
+# Or use NSSM "Environment" tab / import from enrollment-api.env — all §7.3 vars required
+& $nssm start kallon-enrollment-api
+```
+
+Alternatively point NSSM at a small wrapper that loads `C:\kallon\config\enrollment-api.env` (same vars as §7.3).
+
+Verify after reboot: `curl http://127.0.0.1:8000/healthz`
+
+#### Step 3 — TLS reverse proxy (public internet)
+
+Install **Caddy for Windows** or **nginx** on the same server. Example Caddy site block
+(edit hostname, then put in your Caddyfile):
+
+```text
+enroll.yourdomain.com {
+    reverse_proxy 127.0.0.1:8000
+}
+```
+
+Caddy obtains a Let's Encrypt cert automatically when:
+
+- DNS for `enroll.yourdomain.com` points to this server
+- Port 443 is reachable from the internet
+
+Verify from a phone on LTE (not office Wi‑Fi):
+
+```text
+curl https://enroll.yourdomain.com/healthz
+```
+
+Set for factory / fulfill-order:
+
+```powershell
+$env:KALLON_ENROLLMENT_URL = "https://enroll.yourdomain.com/v1"
+```
 
 ---
 
