@@ -5,8 +5,9 @@ source "$(dirname "$0")/lib.sh"
 
 main() {
   local accept="$INSTALL_DIR/../kallon-acceptance.sh"
-  [[ -x "$accept" ]] || die "acceptance script not found/executable: $accept"
-  exec "$accept" --env "$KALLON_ENV"
+  [[ -f "$accept" ]] || die "acceptance script not found: $accept"
+  # Invoke via bash — repo tracks scripts 644; do not require +x bit.
+  exec bash "$accept" --env "$KALLON_ENV"
 }
 
 main "$@"
