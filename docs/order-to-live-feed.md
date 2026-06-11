@@ -11,6 +11,7 @@ It names **who** (role or system), **what** (action or software), and **where**
 
 | Related docs | Role |
 |--------------|------|
+| `docs/architecture-setup-guide.md` | **Layered setup walkthrough** — nodes, diagrams, commands → resources |
 | `docs/postgres-windows-server-setup.md` | One-time control plane (Path P) |
 | `docs/order-fulfillment.md` | `kallon-fulfill-order` reference |
 | `docs/field-test-setup.md` | Bench validation (Jetson §5) |

@@ -9,6 +9,7 @@ on `localhost` only.
 
 | Related doc | Role |
 |-------------|------|
+| **`docs/architecture-setup-guide.md`** | **Layered setup walkthrough** — nodes, diagrams, commands → resources |
 | **`docs/field-test-setup.md`** | **End-to-end flow** — Path A → Path P → §5 Jetson |
 | `kallon_mass_deployment_roadmap.md` | Registry design §5, Phase 2–3 deliverables |
 | `Considering physical server for VPS.md` | Control plane layout, exposure rules |

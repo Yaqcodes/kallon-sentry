@@ -8,6 +8,7 @@ the RTSP + signed-webhook integration surface.
 
 | Related doc | Role |
 |-------------|------|
+| **`docs/architecture-setup-guide.md`** | **Layered setup walkthrough** — nodes, diagrams, commands → resources |
 | **`docs/postgres-windows-server-setup.md`** | **Production control plane** — Postgres + enrollment API + automated peer-add |
 | **`docs/order-fulfillment.md`** | **Per-order automation** — `kallon-fulfill-order` (hub + towers + device.env) |
 | `kallon_work_plan.md` | Living task board — what's done vs hardware-gated |
