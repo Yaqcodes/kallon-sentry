@@ -479,15 +479,16 @@ scripts/kallon-gateway-add-peer.sh \
 **Enable boot-time enroll** (recommended for production):
 
 ```bash
-sudo cp deploy/kallon-enroll.service.example /etc/systemd/system/kallon-enroll.service
-# Edit ExecStart if repo is not at /opt/kallon — e.g. /home/khalifa/kallon/scripts/kallon-enroll.sh
-sudo systemctl daemon-reload
-sudo systemctl enable kallon-enroll.service
+# Prefer installer module (renders unit with repo path + bash ExecStart):
+sudo bash scripts/kallon-jetson-install.sh --only-module 75 --env /etc/kallon/device.env
+
+# Or copy the example and fix the path if your repo is not /home/khalifa/kallon:
+# sudo cp deploy/kallon-enroll.service.example /etc/systemd/system/kallon-enroll.service
 ```
 
 | Why | One-shot on first boot; skipped once `.enrolled` exists |
 | Expected | Runs once at boot if not yet enrolled |
-| `ExecStart` path | `70-app.sh` does not copy `scripts/` to `/opt/kallon` — point at your repo checkout |
+| `ExecStart` | Must use `/usr/bin/bash …/kallon-enroll.sh` — direct exec fails with `203/EXEC` (scripts are 644 in git) |
 
 ---
 
