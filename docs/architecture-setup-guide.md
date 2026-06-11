@@ -596,6 +596,11 @@ ssh -i $PEM "${HUB_SSH_USER}@${HUB_HOST}" "sudo cat /etc/kallon/alert.key" `
 **Step B — copy to each tower with its `device_*.env`** (Phase 7). Every tower on
 `cust_lab` gets the **same** `$FACTORY_DIR\alert.key` plus its own `device_*.env`.
 
+`kallon-fulfill-order` writes `device_*.env` with **Unix LF** line endings even on
+Windows (`write_factory_file`). If you still see `$'\\r': command not found` on the
+Jetson, the file was edited in Notepad or `alert.key` was saved with a CRLF redirect
+— run `sudo sed -i 's/\\r$//' /etc/kallon/device.env` on the tower.
+
 | Command | Invokes | Resources touched |
 |---------|---------|-------------------|
 | `infra.fulfillment.cli` | hub-provisioner + `register-tower` + `device_env.py` | Postgres, hub SSH, local files |

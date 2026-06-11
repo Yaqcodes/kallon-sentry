@@ -35,7 +35,7 @@ from registry.identity import (  # noqa: E402
 )
 from registry.subnet import next_customer_subnet  # noqa: E402
 
-from .device_env import render_device_env  # noqa: E402
+from .device_env import render_device_env, write_factory_file  # noqa: E402
 
 HUB_CLI = _ROOT / "infra" / "hub-provisioner" / "cli.py"
 _SLUG_RE = re.compile(r"^[a-z0-9]+$")
@@ -192,7 +192,7 @@ def fulfill_order(
 
             out_dir.mkdir(parents=True, exist_ok=True)
             env_path = out_dir / f"device_{did}.env"
-            env_path.write_text(render_device_env(
+            write_factory_file(env_path, render_device_env(
                 device_id=did,
                 customer_id=cid,
                 claim_code=claim,
@@ -200,14 +200,14 @@ def fulfill_order(
                 enrollment_url=enrollment_url,
                 cameras=cameras,
                 camera_password=camera_password,
-            ), encoding="utf-8")
+            ))
             unit["qr_payload"] = f"kallon://claim/{claim}"
             plan["units"].append(unit)
 
         manifest_path = out_dir / f"fulfillment_{cid}.json"
         if not dry_run:
             out_dir.mkdir(parents=True, exist_ok=True)
-            manifest_path.write_text(json.dumps(plan, indent=2), encoding="utf-8")
+            write_factory_file(manifest_path, json.dumps(plan, indent=2))
         plan["manifest"] = str(manifest_path)
         return plan
     finally:

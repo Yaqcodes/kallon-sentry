@@ -38,7 +38,7 @@ def render_device_env(
     rtsp_urls = factory_rtsp_urls(cameras)
 
     lines = [
-        "# Rendered by kallon-fulfill-order — do not commit.",
+        "# Rendered by kallon-fulfill-order - do not commit.",
         f"DEVICE_ID={device_id}",
         f"CUSTOMER_ID={customer_id}",
         f"CLAIM_CODE={claim_code}",
@@ -87,3 +87,12 @@ def render_device_env(
         "ENABLE_POWER_ADC=0",
     ]
     return "\n".join(lines) + "\n"
+
+
+def write_factory_file(path: Path, content: str) -> None:
+    """Write text for Linux factory/Jetson consumption — always LF, never CRLF.
+
+    pathlib.Path.write_text() defaults to os.linesep; on Windows that produces
+    \\r\\n and breaks `source device.env` on the tower.
+    """
+    path.write_text(content, encoding="utf-8", newline="\n")

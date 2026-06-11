@@ -9,7 +9,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ["KALLON_REGISTRY"] = "sqlite"
 
 from infra.fulfillment.cli import fulfill_order  # noqa: E402
-from infra.fulfillment.device_env import factory_camera_ips, render_device_env  # noqa: E402
+from infra.fulfillment.device_env import factory_camera_ips, render_device_env, write_factory_file  # noqa: E402
 from registry import get_registry  # noqa: E402
 from registry.identity import customer_id  # noqa: E402
 
@@ -29,6 +29,26 @@ def test_render_device_env():
     )
     assert "CAMERA_IPS=192.168.10.108,192.168.10.109" in text
     assert "ENROLLMENT_URL=https://enroll.example/v1" in text
+
+
+def test_write_factory_file_lf_only():
+    """device.env must be LF on Windows too — Jetson sources it with bash."""
+    import tempfile
+    from pathlib import Path
+
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "device_kln_test_000001.env"
+        write_factory_file(path, render_device_env(
+            device_id="kln_test_000001",
+            customer_id="cust_test",
+            claim_code="clm_test",
+            enrollment_token="enr_test",
+            enrollment_url="https://enroll.example/v1",
+            cameras=1,
+        ))
+        data = path.read_bytes()
+        assert b"\r" not in data
+        assert b"\n" in data
 
 
 def test_fulfill_order_dry_run_new_customer():
@@ -91,6 +111,7 @@ def _run_all():
     tests = [
         test_factory_camera_ips,
         test_render_device_env,
+        test_write_factory_file_lf_only,
         test_fulfill_order_dry_run_new_customer,
     ]
     for fn in tests:
@@ -107,7 +128,7 @@ def _run_all():
     except Exception as e:  # noqa: BLE001
         failed += 1
         print(f"FAIL test_fulfill_order_skips_hub_if_active: {e!r}")
-    print(f"\n{4 - failed}/4 passed")
+    print(f"\n{5 - failed}/5 passed")
     return 1 if failed else 0
 
 
