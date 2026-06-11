@@ -13,6 +13,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+WG_PROVISION=(bash "$SCRIPT_DIR/kallon-wg-provision.sh")
 ENV_FILE="/etc/kallon/device.env"
 ENROLLED_MARKER="/etc/kallon/.enrolled"
 MAX_TRIES="${MAX_TRIES:-30}"
@@ -41,7 +42,7 @@ set -a; source "$ENV_FILE"; set +a
 : "${DEVICE_ID:?}"
 
 # ── 1. keypair + pubkey ───────────────────────────────────────────────────────
-PUBKEY="$("$SCRIPT_DIR/kallon-wg-provision.sh" --env "$ENV_FILE" --print-pubkey)"
+PUBKEY="$("${WG_PROVISION[@]}" --env "$ENV_FILE" --print-pubkey)"
 [[ -n "$PUBKEY" ]] || die "failed to obtain WG public key"
 log "device $DEVICE_ID pubkey ${PUBKEY:0:12}..."
 
@@ -90,7 +91,7 @@ set_env ALERT_WEBHOOK_URL "$ALERT_WEBHOOK_URL"
 ok "wrote hub config to $ENV_FILE (vpn_ip=$VPN_IP)"
 
 # ── 4. render wg0.conf + bring up ─────────────────────────────────────────────
-"$SCRIPT_DIR/kallon-wg-provision.sh" --env "$ENV_FILE" >/dev/null
+"${WG_PROVISION[@]}" --env "$ENV_FILE" >/dev/null
 systemctl restart wg-quick@wg0 || die "wg-quick@wg0 failed to start"
 
 # ── 5. wait for handshake, then confirm ───────────────────────────────────────
