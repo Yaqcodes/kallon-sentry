@@ -15,6 +15,25 @@ each command touches**, and **diagrams** at every layer.
 | `docs/customer-gateway.md` | Hub internals |
 | `docs/alert-webhook.md` | Dashboard contract (RTSP + HMAC) |
 
+### Conventions (read first)
+
+Commands below use **variables** — set once per session on Artemis. Replace
+with your real IPs; examples in parentheses are Terra lab bench values only.
+
+```powershell
+$HUB_HOST     = "YOUR_HUB_PUBLIC_IP"    # e.g. 18.220.75.237 — Lightsail / VPS public IP
+$JETSON_HOST  = "YOUR_JETSON_LAN_IP"    # e.g. 192.168.1.246 — tower on factory Wi‑Fi
+$HUB_SSH_USER = "ubuntu"                # SSH user on hub VPS
+$JETSON_USER  = "khalifa"               # SSH user on Jetson
+$PEM          = "C:\kallon\secrets\terra-hub-ops.pem"
+$FACTORY_DIR  = "C:\kallon\factory\lab" # fulfill-order --output-dir
+```
+
+| Variable | What it is |
+|----------|------------|
+| `$HUB_HOST` | **Public IP** of the customer hub (WireGuard endpoint, SSH target) |
+| `$JETSON_HOST` | **LAN IP** of the tower you are provisioning at the bench |
+
 ---
 
 ## 1. The nodes (who lives where)
@@ -64,8 +83,8 @@ flowchart TB
 
 | Node | Hostname / example | Runs | Never exposed to internet |
 |------|-------------------|------|---------------------------|
-| **Control plane** | Artemis `192.168.1.236` | Postgres, enrollment API, ops automation | Postgres `:5432` |
-| **Customer hub** | e.g. `18.220.75.237` | WireGuard hub, alert listener | `:8080` (VPN only) |
+| **Control plane** | Artemis (e.g. `192.168.1.236` LAN) | Postgres, enrollment API, ops automation | Postgres `:5432` |
+| **Customer hub** | `$HUB_HOST` (public IP) | WireGuard hub, alert listener | `:8080` (VPN only) |
 | **Sentry tower** | Jetson on site | mediamtx, watchdog, enroll client | Camera VLAN |
 | **Public edge** | `enroll.yourdomain.com` | HTTPS only | — |
 
@@ -226,7 +245,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\install-terra-hub-ops-key.ps1
 $env:KALLON_OPS_SSH_IDENTITY_FILE = "C:\kallon\secrets\terra-hub-ops.pem"
 $env:KALLON_OPS_SSH_PUBKEY_FILE   = "C:\kallon\secrets\terra-hub-ops.pub"
 
-powershell -ExecutionPolicy Bypass -File .\scripts\kallon-hub-ssh-verify.ps1 -HubHost 18.220.75.237
+powershell -ExecutionPolicy Bypass -File .\scripts\kallon-hub-ssh-verify.ps1 -HubHost $HUB_HOST
 ```
 
 | Command | Invokes | Resources touched |
@@ -455,7 +474,10 @@ sequenceDiagram
     FO->>FO: write device_*.env + fulfillment_*.json
 ```
 
-### Recommended — one command (hub + tower + factory files)
+### Fulfill-order — pick hub provider
+
+**One command** creates customer (if new), provisions hub (if not `active`), registers
+towers, and writes `device_*.env` on Artemis. Set vars from **Conventions** first.
 
 ```powershell
 cd C:\Users\Artemis\Documents\kallon-sentry
@@ -465,25 +487,66 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 
 $env:KALLON_ENROLLMENT_URL = "https://kallon-enroll.duckdns.org/v1"
 # or ngrok: $env:KALLON_ENROLLMENT_URL = "https://YOUR.ngrok.app/v1"
+```
+
+| Provider | When to use | Hub |
+|----------|-------------|-----|
+| **`manual`** | Hub **already exists** (lab Lightsail, enterprise on-prem, any Ubuntu you SSH to) | You pass `--host $HUB_HOST` |
+| **`lightsail`** | **New retail customer** — CLI creates a fresh AWS Lightsail VPS | boto3 + AWS creds; no `--host` |
+
+#### `manual` — existing hub (lab / first production hub)
+
+Use for Terra lab on an existing Lightsail box, or any hub that already has (or will
+receive) `gateway-init.sh` over SSH.
+
+```powershell
+$HUB_HOST = "YOUR_HUB_PUBLIC_IP"   # lab example: 18.220.75.237
+$FACTORY_DIR = "C:\kallon\factory\lab"
 
 python -m infra.fulfillment.cli lab `
   --display-name "Kallon Lab" `
-  --provider manual --host 18.220.75.237 `
+  --provider manual --host $HUB_HOST `
   --towers 1 --cameras 2 `
   --subnet 10.50.0.0/24 `
-  --output-dir C:\kallon\factory\lab
+  --output-dir $FACTORY_DIR
+```
+
+Hub-only (no towers yet):
+
+```powershell
+python -m infra.hub-provisioner.cli cust_lab `
+  --provider manual --host $HUB_HOST `
+  --subnet 10.50.0.0/24 --display-name "Kallon Lab"
+```
+
+#### `lightsail` — new VPS per customer (retail)
+
+Use when onboarding a **new** customer org and you want the CLI to **create** the hub VM.
+
+```powershell
+$FACTORY_DIR = "C:\kallon\factory\acme"
+
+python -m infra.fulfillment.cli acme `
+  --display-name "Acme Security" `
+  --provider lightsail --region us-east-2 `
+  --towers 3 --cameras 2 `
+  --output-dir $FACTORY_DIR
+```
+
+Subnet auto-assigns (`10.50`, `10.51`, …) unless you pass `--subnet`. After success,
+read the new hub public IP from registry or provisioner output and set `$HUB_HOST` for
+verify/SCP steps below.
+
+Hub-only:
+
+```powershell
+python -m infra.hub-provisioner.cli cust_acme `
+  --provider lightsail --region us-east-2 `
+  --display-name "Acme Security"
 ```
 
 `ENROLLMENT_URL` inside each `device_*.env` is set from `$env:KALLON_ENROLLMENT_URL`
 (or `--enrollment-url`). Required unless `--dry-run`.
-
-### Hub only (no towers yet)
-
-```powershell
-python -m infra.hub-provisioner.cli cust_lab `
-  --provider manual --host 18.220.75.237 `
-  --subnet 10.50.0.0/24 --display-name "Kallon Lab"
-```
 
 ### What fulfill-order does / does not do
 
@@ -491,7 +554,7 @@ python -m infra.hub-provisioner.cli cust_lab `
 |------|----------------|
 | Create `cust_*` + subnet if new | SSH or SCP to **Jetson** |
 | Hub-provision if not `active` | Run `kallon-jetson-install.sh` |
-| SSH → hub (`gateway-init.sh`) | Copy `alert.key` to tower |
+| SSH → hub (`gateway-init.sh`) | Fetch or copy `alert.key` to Jetson (factory step below) |
 | `register-tower` in Postgres | Start enrollment on tower |
 | Write `device_kln_*.env` on Artemis | |
 | Write `fulfillment_*.json` (secrets) | |
@@ -500,14 +563,38 @@ python -m infra.hub-provisioner.cli cust_lab `
 
 | File | Copy to Jetson? | Purpose |
 |------|-----------------|---------|
-| **`device_kln_<slug>_00000N.env`** | **Yes** → `/etc/kallon/device.env` | Factory config + `ENROLLMENT_URL` + token |
+| **`device_kln_<slug>_00000N.env`** | **Yes** → `/etc/kallon/device.env` | Per-tower identity, `ENROLLMENT_URL`, token |
+| **`alert.key`** | **Yes** → `/etc/kallon/alert.key` | **Not** written by fulfill-order — fetch from hub (below) |
 | `fulfillment_cust_<slug>.json` | **No** — ops secret | Plaintext tokens, QR payloads |
 
-Get hub `alert.key` separately (not generated by fulfill-order):
+### `alert.key` — one per hub, same on every tower for that customer
+
+HMAC alerts use a **shared secret** between the **hub** and **all towers** on that
+customer hub. It is **not** per-Jetson and **not** one global key for all customers.
+
+```text
+cust_lab hub ($HUB_HOST)
+  /etc/kallon/alert.key  ──same bytes──►  tower 1, tower 2, tower 3 …
+
+cust_acme hub (different $HUB_HOST)
+  different alert.key  ──►  Acme towers only
+```
+
+`kallon-gateway-init.sh` creates `alert.key` on the **hub** at provision time.
+fulfill-order does **not** embed it in `device_*.env`. Factory ops must **pull it
+from the hub** into the factory bundle, then ship it to **each** tower with that
+tower's `device.env`.
+
+**Step A — fetch hub key into factory dir** (once per customer hub, after fulfill-order):
 
 ```powershell
-ssh -i C:\kallon\secrets\terra-hub-ops.pem ubuntu@18.220.75.237 "sudo cat /etc/kallon/alert.key"
+# Saves one alert.key per customer — reuse for every tower on that hub
+ssh -i $PEM "${HUB_SSH_USER}@${HUB_HOST}" "sudo cat /etc/kallon/alert.key" `
+  > "$FACTORY_DIR\alert.key"
 ```
+
+**Step B — copy to each tower with its `device_*.env`** (Phase 7). Every tower on
+`cust_lab` gets the **same** `$FACTORY_DIR\alert.key` plus its own `device_*.env`.
 
 | Command | Invokes | Resources touched |
 |---------|---------|-------------------|
@@ -527,8 +614,9 @@ ssh -i C:\kallon\secrets\terra-hub-ops.pem ubuntu@18.220.75.237 "sudo cat /etc/k
 ```powershell
 python -m registry.cli list-customers
 python -m registry.cli list-towers --customer cust_lab
-Get-Content C:\kallon\factory\lab\device_kln_lab_000001.env | Select-String ENROLLMENT_URL
-ssh -i C:\kallon\secrets\terra-hub-ops.pem ubuntu@18.220.75.237 "sudo wg show wg0"
+Get-Content "$FACTORY_DIR\device_kln_lab_000001.env" | Select-String ENROLLMENT_URL
+Test-Path "$FACTORY_DIR\alert.key"   # after Step A above
+ssh -i $PEM "${HUB_SSH_USER}@${HUB_HOST}" "sudo wg show wg0"
 ```
 
 Registry row after register:
@@ -547,10 +635,18 @@ Registry row after register:
 **Where:** Any machine that can SSH to the Jetson (Artemis **or** your laptop on the
 same LAN). fulfill-order does not contact the Jetson.
 
+**Factory bundle per tower** (two files from Artemis, always together):
+
+| File on Artemis | Jetson path |
+|-----------------|-------------|
+| `device_kln_<slug>_00000N.env` | `/etc/kallon/device.env` |
+| `alert.key` (from hub — same for all towers on that hub) | `/etc/kallon/alert.key` |
+
 ```mermaid
 flowchart LR
-    ART["Artemis\nC:\\kallon\\factory\\lab"] -->|SCP manual| JET["Jetson\n/etc/kallon/"]
-    HUB["Hub alert.key"] -->|SCP manual| JET
+    HUB["Hub $HUB_HOST\nalert.key"] -->|ssh cat once| ART["$FACTORY_DIR"]
+    FO["fulfill-order"] -->|device_*.env| ART
+    ART -->|"SCP both files"| JET["Jetson $JETSON_HOST\n/etc/kallon/"]
 ```
 
 ```mermaid
@@ -566,12 +662,18 @@ flowchart TB
     HUBKEY["hub alert.key"] -->|copy| AK["/etc/kallon/alert.key"]
 ```
 
-### Copy from Artemis (example — same LAN as Jetson `192.168.1.246`)
+### Copy factory bundle to Jetson
+
+Prerequisite: `$FACTORY_DIR\alert.key` exists (Phase 6 Step A). Use `$JETSON_HOST`
+from **Conventions**.
 
 ```powershell
-scp C:\kallon\factory\lab\device_kln_lab_000001.env khalifa@192.168.1.246:/tmp/
-scp C:\kallon\factory\lab\alert.key khalifa@192.168.1.246:/tmp/   # if saved locally
-ssh khalifa@192.168.1.246
+$JETSON_HOST = "YOUR_JETSON_LAN_IP"
+
+# Both files — every tower gets its own device.env + the same alert.key for that hub
+scp "$FACTORY_DIR\device_kln_lab_000001.env" "${JETSON_USER}@${JETSON_HOST}:/tmp/"
+scp "$FACTORY_DIR\alert.key"                 "${JETSON_USER}@${JETSON_HOST}:/tmp/"
+ssh "${JETSON_USER}@${JETSON_HOST}"
 ```
 
 ### Commands on Jetson
@@ -579,7 +681,7 @@ ssh khalifa@192.168.1.246
 ```bash
 sudo install -d -m 0750 -o root -g khalifa /etc/kallon
 sudo cp /tmp/device_kln_lab_000001.env /etc/kallon/device.env
-sudo cp /tmp/alert.key /etc/kallon/alert.key   # must match hub
+sudo cp /tmp/alert.key /etc/kallon/alert.key   # same file as hub — do not generate per tower
 sudo chown root:khalifa /etc/kallon/device.env /etc/kallon/alert.key
 sudo chmod 0640 /etc/kallon/device.env /etc/kallon/alert.key
 
@@ -643,7 +745,7 @@ sudo scripts/kallon-enroll.sh --env /etc/kallon/device.env
 
 ```powershell
 python -m registry.cli get-config --device kln_lab_000001
-ssh -i C:\kallon\secrets\terra-hub-ops.pem ubuntu@18.220.75.237 "sudo wg show wg0"
+ssh -i $PEM "${HUB_SSH_USER}@${HUB_HOST}" "sudo wg show wg0"
 ```
 
 Expected: tower `status=active`, hub shows peer with `/32`.
@@ -711,13 +813,14 @@ ffprobe -rtsp_transport tcp rtsp://10.50.0.2:8554/cam1
 ### Customer + hub + factory files (Phase 6)
 
 - [ ] `python -m infra.fulfillment.cli …` → customer `status=active`
-- [ ] `C:\kallon\factory\<slug>\device_*.env` exists with correct `ENROLLMENT_URL`
-- [ ] Hub `wg show wg0` OK; `alert.key` fetched from hub
+- [ ] `$FACTORY_DIR\device_*.env` exists with correct `ENROLLMENT_URL`
+- [ ] Hub `wg show wg0` OK on `$HUB_HOST`
+- [ ] `$FACTORY_DIR\alert.key` fetched from hub (one per customer hub)
 
 ### Tower (Phases 7–8)
 
-- [ ] SCP `device_*.env` → Jetson `/etc/kallon/device.env`
-- [ ] SCP hub `alert.key` → Jetson
+- [ ] SCP **both** `device_*.env` + `alert.key` → Jetson `/etc/kallon/`
+- [ ] Same `alert.key` on every tower for that hub
 - [ ] `kallon-jetson-install.sh` + acceptance PASS
 - [ ] `kallon-enroll.service` enabled
 - [ ] Enroll → registry `active`, peer on hub
