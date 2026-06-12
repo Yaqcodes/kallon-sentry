@@ -558,19 +558,55 @@ Do **not** rely on the registry default without `DATABASE_URL` set.
 
 ## 9. Backups
 
-Roadmap requires daily `pg_dump`. Example one-liner:
+Roadmap requires daily `pg_dump`. Use the repo script — it reads `DATABASE_URL`
+from `C:\kallon\config\enrollment-api.env` (no password in the script file).
+
+Copy the script to the server (once):
 
 ```powershell
-$backupDir = "C:\kallon\backups"
-New-Item -ItemType Directory -Force -Path $backupDir | Out-Null
-
-$env:PGPASSWORD = "YOUR_PASSWORD"
-& "C:\Program Files\PostgreSQL\16\bin\pg_dump.exe" `
-  -U kallon -h localhost -d kallon -Fc `
-  -f "$backupDir\kallon_$(Get-Date -Format yyyyMMdd).dump"
+New-Item -ItemType Directory -Force -Path C:\kallon\scripts | Out-Null
+Copy-Item .\scripts\postgres-backup.ps1 C:\kallon\scripts\
 ```
 
-Schedule in **Task Scheduler** (e.g. daily 02:00). Copy dumps off-site.
+**Manual test** (note `-ExecutionPolicy Bypass` — required on Windows Server):
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File C:\kallon\scripts\postgres-backup.ps1
+```
+
+Check `C:\kallon\backups\kallon_YYYYMMDD.dump` and `C:\kallon\backups\backup.log`.
+
+### Task Scheduler
+
+Do **not** set the task action to the `.ps1` file directly. Windows blocks unsigned
+scripts unless PowerShell is started with `-ExecutionPolicy Bypass`. Use
+`powershell.exe` as the program:
+
+| Field | Value |
+|-------|--------|
+| Program/script | `powershell.exe` |
+| Add arguments | `-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "C:\kallon\scripts\postgres-backup.ps1"` |
+| Start in (optional) | `C:\kallon` |
+
+Register from an elevated PowerShell session (daily 02:00, run whether user is logged on):
+
+```powershell
+$action = New-ScheduledTaskAction `
+  -Execute "powershell.exe" `
+  -Argument '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "C:\kallon\scripts\postgres-backup.ps1"'
+$trigger = New-ScheduledTaskTrigger -Daily -At 2:00AM
+$principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
+$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
+  -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Hours 1)
+Register-ScheduledTask -TaskName "Kallon Postgres Backup" -Action $action -Trigger $trigger `
+  -Principal $principal -Settings $settings -Force
+```
+
+After **Run**, the task should finish in under a minute. If it stays **Running**,
+the action is usually wrong (e.g. pointing at the `.ps1` without `powershell.exe`,
+or missing `-NonInteractive`). Check `C:\kallon\backups\backup.log` for errors.
+
+Copy dumps off-site.
 
 ---
 
@@ -596,6 +632,9 @@ must share one durable registry.
 | `password authentication failed` | Wrong password in URL | Reset: `ALTER USER kallon PASSWORD '...';` in psql as postgres |
 | `permission denied for table` | Schema owned by wrong user | Re-run init as `kallon` owner; check `GRANT` on database |
 | Enrollment API can't reach DB from another host | `pg_hba` / firewall | Add host rule for API IP only; never open 5432 publicly |
+| `cannot be loaded... not digitally signed` | PowerShell execution policy | Run with `-ExecutionPolicy Bypass`; fix Task Scheduler action (§9) |
+| Backup task stuck **Running** | Wrong task action / interactive shell | Program = `powershell.exe`; args include `-NonInteractive -ExecutionPolicy Bypass -File ...` |
+| No `.dump` file | Script failed before `pg_dump` | Read `C:\kallon\backups\backup.log`; verify `DATABASE_URL` in `enrollment-api.env` |
 
 ---
 
