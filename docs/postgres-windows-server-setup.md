@@ -561,50 +561,68 @@ Do **not** rely on the registry default without `DATABASE_URL` set.
 Roadmap requires daily `pg_dump`. Use the repo script — it reads `DATABASE_URL`
 from `C:\kallon\config\enrollment-api.env` (no password in the script file).
 
-Copy the script to the server (once):
+Keep `postgres-backup.ps1` and `postgres-backup.cmd` together (repo
+`scripts\` or copy both to `C:\kallon\scripts\`). The `.cmd` is the supported
+way to double-click or schedule — **do not** open the `.ps1` directly.
+
+**Manual test** (any of these):
 
 ```powershell
-New-Item -ItemType Directory -Force -Path C:\kallon\scripts | Out-Null
-Copy-Item .\scripts\postgres-backup.ps1 C:\kallon\scripts\
-```
+# From repo on Artemis (adjust path if your clone differs):
+& "C:\Users\Artemis\Documents\kallon-sentry\scripts\postgres-backup.cmd"
 
-**Manual test** (note `-ExecutionPolicy Bypass` — required on Windows Server):
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File C:\kallon\scripts\postgres-backup.ps1
+# Or explicit PowerShell (same as what the .cmd runs):
+powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\Artemis\Documents\kallon-sentry\scripts\postgres-backup.ps1
 ```
 
 Check `C:\kallon\backups\kallon_YYYYMMDD.dump` and `C:\kallon\backups\backup.log`.
 
-### Task Scheduler
-
-Do **not** set the task action to the `.ps1` file directly. Windows blocks unsigned
-scripts unless PowerShell is started with `-ExecutionPolicy Bypass`. Use
-`powershell.exe` as the program:
+### Task Scheduler (recommended: `.cmd`)
 
 | Field | Value |
 |-------|--------|
-| Program/script | `powershell.exe` |
-| Add arguments | `-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "C:\kallon\scripts\postgres-backup.ps1"` |
-| Start in (optional) | `C:\kallon` |
+| Program/script | Full path to `postgres-backup.cmd` (not the `.ps1`) |
+| Add arguments | *(leave empty)* |
+| Start in | Folder containing the `.cmd` (e.g. `...\kallon-sentry\scripts`) |
 
-Register from an elevated PowerShell session (daily 02:00, run whether user is logged on):
+Example path on Artemis:
 
-```powershell
-$action = New-ScheduledTaskAction `
-  -Execute "powershell.exe" `
-  -Argument '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "C:\kallon\scripts\postgres-backup.ps1"'
-$trigger = New-ScheduledTaskTrigger -Daily -At 2:00AM
-$principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
-$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
-  -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Hours 1)
-Register-ScheduledTask -TaskName "Kallon Postgres Backup" -Action $action -Trigger $trigger `
-  -Principal $principal -Settings $settings -Force
+```text
+C:\Users\Artemis\Documents\kallon-sentry\scripts\postgres-backup.cmd
 ```
 
-After **Run**, the task should finish in under a minute. If it stays **Running**,
-the action is usually wrong (e.g. pointing at the `.ps1` without `powershell.exe`,
-or missing `-NonInteractive`). Check `C:\kallon\backups\backup.log` for errors.
+Register from an elevated PowerShell session (daily 02:00). Prefer the **Artemis**
+logon account (same user whose CLI test worked) instead of `SYSTEM` when the
+script lives under `C:\Users\Artemis\...`:
+
+```powershell
+$cmd = "C:\Users\Artemis\Documents\kallon-sentry\scripts\postgres-backup.cmd"
+$workDir = Split-Path $cmd -Parent
+$action = New-ScheduledTaskAction -Execute $cmd -WorkingDirectory $workDir
+$trigger = New-ScheduledTaskTrigger -Daily -At 2:00AM
+$principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" `
+  -LogonType Password -RunLevel Highest
+$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
+  -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Hours 1) `
+  -MultipleInstances IgnoreNew
+Register-ScheduledTask -TaskName "Kallon Postgres Backup" -Action $action -Trigger $trigger `
+  -Principal $principal -Settings $settings -Force
+# Prompts for the Artemis account password once — required for "Run whether user is logged on or not".
+```
+
+After **Run**, the task should finish in under a minute.
+
+**If the task stays Running**
+
+1. Open the task → **Actions** tab. Wrong setups that hang or do nothing:
+   - Program = `postgres-backup.ps1` (opens blocked / interactive shell)
+   - Program = `powershell.exe` with **empty** arguments (interactive shell never exits)
+   - Full command pasted into **Program/script** with arguments in the wrong field
+2. **History** tab → last result `0x41301` = still running; end any stuck run:
+   `Get-Process powershell, pg_dump -ErrorAction SilentlyContinue | Stop-Process -Force`
+3. Check `C:\kallon\backups\backup.log`. No new `=== backup run started ===` line
+   means the scheduled action never reached the script — fix the action path.
+4. Delete the old task and re-register with `postgres-backup.cmd` as above.
 
 Copy dumps off-site.
 
@@ -632,8 +650,8 @@ must share one durable registry.
 | `password authentication failed` | Wrong password in URL | Reset: `ALTER USER kallon PASSWORD '...';` in psql as postgres |
 | `permission denied for table` | Schema owned by wrong user | Re-run init as `kallon` owner; check `GRANT` on database |
 | Enrollment API can't reach DB from another host | `pg_hba` / firewall | Add host rule for API IP only; never open 5432 publicly |
-| `cannot be loaded... not digitally signed` | PowerShell execution policy | Run with `-ExecutionPolicy Bypass`; fix Task Scheduler action (§9) |
-| Backup task stuck **Running** | Wrong task action / interactive shell | Program = `powershell.exe`; args include `-NonInteractive -ExecutionPolicy Bypass -File ...` |
+| `cannot be loaded... not digitally signed` | Opened `.ps1` directly / no Bypass | Double-click `postgres-backup.cmd` instead; or `powershell -ExecutionPolicy Bypass -File ...` |
+| Backup task stuck **Running** | `.ps1` as program, or `powershell.exe` with no args | Program = full path to `postgres-backup.cmd`; args empty; see §9 |
 | No `.dump` file | Script failed before `pg_dump` | Read `C:\kallon\backups\backup.log`; verify `DATABASE_URL` in `enrollment-api.env` |
 
 ---

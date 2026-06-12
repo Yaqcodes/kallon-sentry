@@ -2,10 +2,11 @@
 #
 # Reads credentials from DATABASE_URL in enrollment-api.env — do not hardcode passwords.
 #
-# Usage (manual):
+# Usage (manual — do not double-click the .ps1; use the .cmd or powershell -File):
+#   .\scripts\postgres-backup.cmd
 #   powershell -ExecutionPolicy Bypass -File .\scripts\postgres-backup.ps1
 #
-# Task Scheduler must invoke powershell.exe with -ExecutionPolicy Bypass (see
+# Task Scheduler: point the action at postgres-backup.cmd (see
 # docs/postgres-windows-server-setup.md §9).
 param(
     [string]$EnvFile = "C:\kallon\config\enrollment-api.env",
@@ -52,6 +53,8 @@ function Parse-PostgresUrl([string]$Url) {
 
 New-Item -ItemType Directory -Force -Path $BackupDir | Out-Null
 $logFile = Join-Path $BackupDir "backup.log"
+$startLine = "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') === backup run started (user=$env:USERNAME) ==="
+Add-Content -LiteralPath $logFile -Value $startLine -Encoding UTF8
 
 try {
     $dbUrl = Get-DatabaseUrlFromEnvFile -Path $EnvFile
