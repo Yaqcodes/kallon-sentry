@@ -8,11 +8,10 @@ each command touches**, and **diagrams** at every layer.
 
 | Related | Role |
 |---------|------|
-| `docs/postgres-windows-server-setup.md` | Path P detail (Postgres, API, Caddy) |
-| `docs/order-fulfillment.md` | `kallon-fulfill-order` reference |
-| `docs/order-to-live-feed.md` | Business narrative (order → live feed) |
+| **`docs/README.md`** | Documentation index |
+| `docs/postgres-windows-server-setup.md` | Path P detail (Postgres, API, Caddy, hub §8) |
+| `docs/order-fulfillment.md` | `kallon-fulfill-order` + business walkthrough |
 | `docs/field-test-setup.md` | Bench validation & module reference |
-| `docs/customer-gateway.md` | Hub internals |
 | `docs/alert-webhook.md` | Dashboard contract (RTSP + HMAC) |
 
 ### Conventions (read first)

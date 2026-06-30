@@ -1,5 +1,11 @@
 # Kallon Sentry Tower — Current State of the Stack (Phases 1–4)
 
+> **ARCHIVED — May 2025 bench snapshot.** Contains live IPs, keys, and process state from a single lab session. **Do not use as project canonical truth.**
+>
+> **Follow instead:** [`docs/README.md`](../docs/README.md) → [`docs/project-official-reference.md`](../docs/project-official-reference.md) for architecture; [`docs/field-test-setup.md`](../docs/field-test-setup.md) for current setup.
+>
+> For living task status see [`planning/work-plan.md`](../planning/work-plan.md).
+
 > **Terra Industries · Confidential · Internal Engineering · May 2026**
 >
 > **HANDLE AS SECRET.** This document includes live WireGuard private keys, HMAC alert keys, RSA private keys, default camera credentials, and operator passwords. Treat it as `chmod 600`, do not commit to any public repository, do not copy into shared chat tools, do not include in screenshots. The repo's own `.gitignore` already excludes the underlying secret files (`*.pem`, `*.key`, `wg-keys`*); this aggregated copy bypasses that protection on purpose, for the engineering owner only.

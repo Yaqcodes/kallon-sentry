@@ -4,14 +4,14 @@
 
 | Related doc | Role |
 |-------------|------|
-| **`docs/field-test-setup.md`** | **End-to-end setup & test walkthrough** (field-test branch) |
-| **`docs/postgres-windows-server-setup.md`** | **Production control plane** — Windows Server Postgres + enrollment API |
-| `kallon_sovereign_stack_brief.md` | Product vision, phase exit criteria (v2.0) |
-| `kallon_current_state.md` | Live bench state, verified services, credential inventory |
-| `Considering physical server for VPS.md` | Control plane layout, hub hosting options, vendor lock-in |
-| `jetson-lab-steps-8-10.md` | Phase 3 lab walkthrough (legacy) |
-| `phase4-setup-guide.md` | Phase 4 tamper / health bring-up (legacy) |
-| `HOW_TO_USE.md` | ONVIF & PTZ daemon CLI reference (legacy bench path) |
+| **`../../docs/README.md`** | **Documentation index — start here** |
+| **`../../docs/project-official-reference.md`** | Canonical technical reference |
+| **`../../docs/architecture-setup-guide.md`** | Layered setup walkthrough |
+| **`../../docs/field-test-setup.md`** | End-to-end setup & test (field-test branch) |
+| **`../../docs/postgres-windows-server-setup.md`** | Production control plane (Path P) |
+| `sovereign-stack-brief.md` | Product vision, phase exit criteria (v2.0) |
+| `work-plan.md` | Living task board (synced with code) |
+| `legacy/bench-snapshot-2025-05.md` | May 2025 bench snapshot (archived) |
 
 ---
 
@@ -99,7 +99,7 @@ flowchart TB
 
 Postgres is **not** exposed to the public internet. Enrollment API is HTTPS-only.
 
-See `Considering physical server for VPS.md` for layout and vendor-lock-in notes.
+See **Appendix A** for control-plane layout and vendor-lock-in notes.
 
 ### 2.2 Hub hosting — Option B (default) and Option C
 
@@ -512,7 +512,7 @@ Everything verified live on the bench as of May 2026.
 | `infra/enrollment-api/` | FastAPI; `POST /v1/enroll`; TLS via reverse proxy; backed by Postgres |
 | `scripts/kallon-enroll.sh` | Jetson first boot; calls enrollment API |
 | `deploy/kallon-enroll.service.example` | One-shot; `ConditionPathExists=!/etc/kallon/.enrolled` |
-| `docs/identity-and-secrets.md` | ID formats, file locations, rotation procedures |
+| `../docs/identity-and-secrets.md` | ID formats, file locations, rotation procedures |
 
 **Exit:** Two towers enroll against enrollment API on physical server; Postgres rows updated; acceptance passes.
 
@@ -533,8 +533,8 @@ Everything verified live on the bench as of May 2026.
 | `scripts/kallon-hub-provision` | CLI; writes registry + `gateway_manifest.json` |
 | `scripts/kallon-gateway-init.sh` | On hub VM: WG hub, UFW, alert listener systemd |
 | `scripts/kallon-gateway-add-peer.sh` | Idempotent peer add; called by enrollment API |
-| `docs/customer-gateway.md` | Terra-internal runbook; Option B + C |
-| `docs/alert-webhook.md` | Dashboard integration contract (RTSP + HMAC) |
+| `../docs/postgres-windows-server-setup.md` §8 | Terra-internal hub runbook; Option B + C |
+| `../docs/alert-webhook.md` | Dashboard integration contract (RTSP + HMAC) |
 | Hub UFW hardened | 51820/udp open; 8080/tcp from VPN subnet only |
 | Two-tower test on one hub | `cust_acme` with two towers on one API-provisioned VPS |
 
@@ -604,7 +604,7 @@ Everything verified live on the bench as of May 2026.
 | Postgres HA / replica | On physical server or secondary node; `pg_dump` off-site |
 | Gateway add-peer over SSH/REST | Enrollment API → hub; no manual step |
 | Burn-in acceptance | `kallon-acceptance.sh` on rack before ship |
-| Per-device alert key rotation | Runbook in `docs/identity-and-secrets.md` |
+| Per-device alert key rotation | Runbook in `../docs/identity-and-secrets.md` |
 
 ---
 
@@ -623,54 +623,55 @@ Deferred until Phases 1–5 complete. Not blocking pilot.
 
 ## 11. Deliverables Checklist
 
-Use this as your working task board.
+Use this as a phase-level checklist. **Living status with hardware gates:** `work-plan.md`.
 
 ### Phase 1 — Installer
 
-- [ ] `deploy/device.env.example`
-- [ ] `deploy/wg0.conf.example`
-- [ ] `scripts/install/00-preflight.sh`
-- [ ] `scripts/install/10-packages.sh`
-- [ ] `scripts/install/20-users-groups.sh`
-- [ ] `scripts/install/30-network-policy.sh`
-- [ ] `scripts/install/40-wireguard.sh`
-- [ ] `scripts/install/50-mediamtx.sh`
-- [ ] `scripts/install/60-camera-route.sh`
-- [ ] `scripts/install/70-app.sh`
-- [ ] `scripts/install/80-watchdogs.sh`
-- [ ] `scripts/install/90-firewall.sh`
-- [ ] `scripts/install/99-acceptance.sh`
-- [ ] `scripts/kallon-jetson-install.sh`
-- [ ] `scripts/kallon-wg-provision.sh`
-- [ ] `scripts/kallon-acceptance.sh`
-- [ ] `deploy/iptables-rebroadcast.rules.example`
+- [x] `deploy/device.env.example`
+- [x] `deploy/wg0.conf.example`
+- [x] `scripts/install/00-preflight.sh`
+- [x] `scripts/install/10-packages.sh`
+- [x] `scripts/install/20-users-groups.sh`
+- [x] `scripts/install/30-network-policy.sh`
+- [x] `scripts/install/40-wireguard.sh`
+- [x] `scripts/install/50-mediamtx.sh`
+- [x] `scripts/install/60-camera-route.sh`
+- [x] `scripts/install/70-app.sh`
+- [x] `scripts/install/80-watchdogs.sh`
+- [x] `scripts/install/90-firewall.sh`
+- [x] `scripts/install/99-acceptance.sh`
+- [x] `scripts/kallon-jetson-install.sh`
+- [x] `scripts/kallon-wg-provision.sh`
+- [x] `scripts/kallon-acceptance.sh`
+- [x] `deploy/iptables-rebroadcast.rules.example`
+- [ ] **Exit:** wiped Jetson → `kallon-acceptance.sh` green *(hardware-gated)*
 
 ### Phase 2 — Registry & Enrollment
 
-- [ ] Postgres 16 on Terra physical server
-- [ ] `registry/migrations/001_initial.sql`
-- [ ] `registry/interface.py`
-- [ ] `registry/postgres_provider.py`
-- [ ] `registry/sqlite_provider.py` (unit tests only)
-- [ ] `registry/cli.py`
-- [ ] `infra/enrollment-api/main.py`
-- [ ] `infra/enrollment-api/requirements.txt`
-- [ ] TLS reverse proxy for enrollment API
-- [ ] `scripts/kallon-enroll.sh` (Jetson-side)
-- [ ] `deploy/kallon-enroll.service.example`
-- [ ] `docs/identity-and-secrets.md`
+- [ ] Postgres 16 on Terra physical server *(Path P production exit)*
+- [x] `registry/migrations/001_initial.sql`
+- [x] `registry/interface.py`
+- [x] `registry/postgres_provider.py`
+- [x] `registry/sqlite_provider.py` (unit tests only)
+- [x] `registry/cli.py`
+- [x] `infra/enrollment-api/app/main.py`
+- [x] `infra/enrollment-api/requirements.txt`
+- [ ] TLS reverse proxy for enrollment API *(Path P production exit)*
+- [x] `scripts/kallon-enroll.sh` (Jetson-side)
+- [x] `deploy/kallon-enroll.service.example`
+- [x] `../docs/identity-and-secrets.md`
 
 ### Phase 3 — Hub Automation
 
-- [ ] `infra/hub-provisioner/interface.py`
-- [ ] `infra/hub-provisioner/lightsail.py`
+- [x] `infra/hub-provisioner/interface.py`
+- [x] `infra/hub-provisioner/lightsail.py`
 - [ ] `infra/hub-provisioner/hetzner.py` (optional secondary)
-- [ ] `infra/hub-provisioner/manual.py` (Option C)
-- [ ] `scripts/kallon-hub-provision`
-- [ ] `scripts/kallon-gateway-init.sh`
-- [ ] `scripts/kallon-gateway-add-peer.sh`
-- [ ] `docs/customer-gateway.md`
-- [ ] `docs/alert-webhook.md`
+- [x] `infra/hub-provisioner/manual.py` (Option C)
+- [x] `infra/hub-provisioner/cli.py` (`kallon-hub-provision`)
+- [x] `scripts/kallon-gateway-init.sh`
+- [x] `scripts/kallon-gateway-add-peer.sh`
+- [x] Hub runbook *(see `../docs/postgres-windows-server-setup.md` §8)*
+- [x] `../docs/alert-webhook.md`
 
 ### Phase 4 — Pilot
 
@@ -718,6 +719,105 @@ Use this as your working task board.
 | Per-tower cloud console | Architecture prohibits it: one hub per customer org via `kallon-hub-provision` |
 | VPS vendor lock-in | `HubProvider` interface; core contracts unchanged when swapping provider |
 | Postgres unreachable from factory | Enrollment API is the only factory/tower-facing interface to registry |
+
+---
+
+## Appendix A — Physical server as control plane
+
+This appendix records how Terra’s **self-hosted physical server** fits into the mass-deployment architecture, how it relates to per-customer hub VPS provisioning, registry placement, and vendor lock-in.
+
+### Where the physical server fits
+
+Think of it as **Terra’s control plane** — not the video path, and not necessarily every customer VPN hub.
+
+```mermaid
+flowchart TB
+    subgraph Field["Field"]
+        T1["Tower 1"]
+        T2["Tower 2"]
+    end
+
+    subgraph Control["Terra physical server (control plane)"]
+        PG["PostgreSQL registry"]
+        API["Enrollment API"]
+        ORCH["Hub provisioner\n(provider-agnostic)"]
+        OPS["Ops / CI / backups"]
+    end
+
+    subgraph Hubs["Customer hubs (one per customer org)"]
+        H1["Hub VM — cust_acme"]
+        H2["Hub VM — cust_beta"]
+    end
+
+    subgraph Dash["Terra dashboard (separate workstream)"]
+        UI["Buyer UI"]
+    end
+
+    T1 & T2 -->|"WG + enroll HTTPS"| H1
+    T1 & T2 -->|"enroll HTTPS"| API
+    API --> PG
+    ORCH --> PG
+    ORCH -->|"create VM"| H1
+    ORCH -->|"create VM"| H2
+    H1 -->|"alerts"| UI
+    H1 -->|"RTSP relay"| UI
+```
+
+| Role | On physical server? | Why |
+|------|---------------------|-----|
+| **Postgres registry** | **Yes — from day 1** | Single source of truth; no interim SQLite/Sheet migration |
+| **Enrollment API** | **Yes** | Towers call this on first boot; stable HTTPS endpoint |
+| **Hub provisioner** | **Yes** (orchestrator) | Decides *where* hub VMs live; calls provider adapters |
+| **Per-customer hub VMs** | **No** (by default) | Hubs run on external VPS (Option B) or customer/on-prem host (Option C) |
+| **Terra dashboard backend** | Often same machine early | Reads registry + alert stream |
+| **RTSP/video relay** | Usually on **hub**, not control plane | Keeps control plane light |
+
+**Core principle:** towers talk to **hub** (VPN + alerts) and **enrollment API** (config). They never talk to Postgres directly. The physical server is the **brain**; hubs are **edge rendezvous points** per customer org.
+
+### Hub hosting options
+
+| Option | How | AWS required? | Status |
+|--------|-----|---------------|--------|
+| **A. VMs on physical server** | Proxmox / KVM / LXD: one VM per `cust_*` | No | Available; not default |
+| **B. External VPS via API** | Lightsail, Hetzner, OVH, DigitalOcean, … | **No** | **Default for retail** |
+| **C. Manual / customer DC** | `kallon-gateway-init.sh` on any Ubuntu host | No | **Enterprise / sovereign tier** |
+
+```bash
+kallon-hub-provision cust_acme --provider lightsail    # Option B (lab + retail)
+kallon-hub-provision cust_acme --provider manual --host 203.0.113.42  # Option C
+```
+
+All paths produce the same **`gateway_manifest.json`** and registry row.
+
+### Postgres from day 1
+
+| Decision | Rationale |
+|----------|-----------|
+| Postgres is the **only** registry store from implementation start | Schema + migrations in repo; enrollment API and factory CLI share one DB |
+| SQLite / Google Sheets | Not used as source of truth |
+| `RegistryProvider` interface | Retained for tests; production = `KALLON_REGISTRY=postgres` |
+
+**Exposure:** Postgres LAN/ops-VPN only; enrollment API HTTPS public via reverse proxy. Connection string via environment — never in git.
+
+**Windows Server:** `../docs/postgres-windows-server-setup.md` (Path P). **Linux lab:** `../docs/field-test-setup.md` §6.
+
+### Vendor lock-in audit
+
+| Piece | Lock-in risk | Mitigation |
+|-------|--------------|------------|
+| **WireGuard** | Low | Open protocol; `wg0.conf` portable anywhere |
+| **RTSP + mediamtx** | Low | Standard RTSP |
+| **Alert JSON + HMAC** | None | Terra-owned contract |
+| **Jetson / L4T** | Medium | NVIDIA stack — acceptable for this product |
+| **PostgreSQL** | None | Run anywhere |
+| **Terraform + AWS** | High if required | **Not in core** — optional adapter only |
+| **VPS provider** | Low | `HubProvider` interface |
+
+**Fixed contracts (not a cloud vendor):** `device.env` + identity formats; enrollment API; `gateway_manifest.json`; WireGuard peer model; RTSP + HMAC alert outlet; modular installer `00`–`99`.
+
+### One-line summary
+
+**Terra’s physical server is the control plane (Postgres + enrollment + hub automation); each customer gets a dedicated hub VM via API VPS (Option B) or manual/on-prem init (Option C); the core is WireGuard + RTSP + signed alerts — no AWS requirement, no buyer terminals.**
 
 ---
 

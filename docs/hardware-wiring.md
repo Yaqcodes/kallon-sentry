@@ -2,7 +2,7 @@
 
 Phase 4 tamper and health-monitoring sensors on a Jetson Orin Nano dev kit.
 
-Read alongside `kallon_sovereign_stack_brief.md` (Phase 4) and `kallon_watchdog.py`.
+Read alongside `../planning/sovereign-stack-brief.md` (Phase 4) and `kallon_watchdog.py`.
 
 ---
 

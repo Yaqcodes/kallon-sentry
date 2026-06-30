@@ -5,11 +5,14 @@ Version 2.0 · June 2026
 
 | Related doc | Role |
 |-------------|------|
-| **`docs/field-test-setup.md`** | End-to-end setup & test walkthrough (field-test branch) |
-| **`docs/postgres-windows-server-setup.md`** | Production control plane on Windows Server |
-| `kallon_mass_deployment_roadmap.md` | Manufacturing, deployment, control plane, installer |
-| `kallon_current_state.md` | Live bench verification (Phases 0–4) |
-| `Considering physical server for VPS.md` | Control plane and hub hosting options |
+| **`../../docs/README.md`** | Documentation index — start here |
+| **`../../docs/project-official-reference.md`** | Canonical technical reference |
+| **`../../docs/architecture-setup-guide.md`** | Layered setup walkthrough |
+| **`../../docs/field-test-setup.md`** | End-to-end setup & test walkthrough (field-test branch) |
+| **`../../docs/postgres-windows-server-setup.md`** | Production control plane on Windows Server |
+| `mass-deployment-roadmap.md` | Manufacturing, deployment, control plane, installer |
+| `work-plan.md` | Living task board |
+| `legacy/bench-snapshot-2025-05.md` | May 2025 bench snapshot (archived) |
 
 ---
 
@@ -19,7 +22,7 @@ The Kallon sentry tower currently operates on a commercially sourced NVR stack t
 
 **Buyer experience:** Customers buy Kallon towers, power them on, and monitor via the **Terra dashboard**. They do not configure VPNs, cloud consoles, or terminals. Terra operates the platform (registry, enrollment, customer hubs) behind the scenes.
 
-**Deployment and manufacturing detail** — installer modules, registry, hub provisioner, identity formats — lives in `kallon_mass_deployment_roadmap.md`. This brief defines product intent and technical exit criteria; the roadmap defines how we build and ship.
+**Deployment and manufacturing detail** — installer modules, registry, hub provisioner, identity formats — lives in `mass-deployment-roadmap.md`. This brief defines product intent and technical exit criteria; the roadmap defines how we build and ship.
 
 The redesign does not affect the tower's physical shell, solar power system, or mounting hardware. The upgrade is self-contained to compute, networking, and sensor electronics inside the enclosure.
 
@@ -164,13 +167,13 @@ Default hub hosting: **API-provisioned VPS** (AWS Lightsail first adapter; addit
 | Live video | RTSP/TCP over VPN | Terra dashboard (and hub relay if needed) |
 | Events | HTTP POST + `X-Kallon-Signature` (HMAC-SHA256) | Terra alert ingest → dashboard |
 
-No customer-built NOC or VMS required for retail. Integration spec: `docs/alert-webhook.md` (roadmap deliverable).
+No customer-built NOC or VMS required for retail. Integration spec: `../docs/alert-webhook.md` (roadmap deliverable).
 
 ---
 
 ## 5. Phased Work Plan
 
-> **Status:** Phases 0–4 are **largely validated on bench** (see `kallon_current_state.md`). Remaining work is packaging (installer, registry, hub automation), pilot sign-off (managed switch, zero-egress proof), and field WAN. ArtemisOS remains Phase 5 below.
+> **Status:** Phases 0–4 bench validation is documented in `legacy/bench-snapshot-2025-05.md` (May 2025). Installer, registry, enrollment API, and hub automation are **implemented on `field-test`** — see `work-plan.md`. Remaining work: Path P production exit, pilot sign-off (managed switch, zero-egress proof), and field WAN. ArtemisOS remains Phase 5 below.
 
 ### Phase 0 — Bench Unit Assembly ✅
 
@@ -320,7 +323,7 @@ No customer-built NOC or VMS required for retail. Integration spec: `docs/alert-
 | 4 | Tamper wiring · watchdog · signed alert pipeline ✅ |
 | 5 | Sensor plugin spec · ArtemisOS · OTA |
 
-Manufacturing installer, registry schema, and hub provisioner: **`kallon_mass_deployment_roadmap.md`**.
+Manufacturing installer, registry schema, and hub provisioner: **`mass-deployment-roadmap.md`**.
 
 ---
 

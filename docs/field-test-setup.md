@@ -8,16 +8,16 @@ the RTSP + signed-webhook integration surface.
 
 | Related doc | Role |
 |-------------|------|
+| **`docs/README.md`** | Documentation index |
 | **`docs/architecture-setup-guide.md`** | **Layered setup walkthrough** — nodes, diagrams, commands → resources |
 | **`docs/postgres-windows-server-setup.md`** | **Production control plane** — Postgres + enrollment API + automated peer-add |
 | **`docs/order-fulfillment.md`** | **Per-order automation** — `kallon-fulfill-order` (hub + towers + device.env) |
-| `kallon_work_plan.md` | Living task board — what's done vs hardware-gated |
-| `kallon_mass_deployment_roadmap.md` | Architecture reference (Phases 1–4) |
-| `kallon_current_state.md` | **Your live bench** — IPs, keys, services today |
-| `docs/customer-gateway.md` | Hub provisioning runbook (shorter) |
+| `planning/work-plan.md` | Living task board — what's done vs hardware-gated |
+| `planning/mass-deployment-roadmap.md` | Architecture reference (Phases 1–4) |
+| `legacy/bench-snapshot-2025-05.md` | May 2025 bench snapshot (historical IPs; re-probe live state) |
 | `docs/alert-webhook.md` | Dashboard integration contract |
 | `docs/identity-and-secrets.md` | ID formats and secret handling |
-| `HOW_TO_USE.md` | **Legacy** bench path (pre-installer); still valid for ONVIF/PTZ CLI |
+| `docs/dev-onvif-ptz.md` | ONVIF/PTZ CLI reference |
 
 > **Replaces for new installs:** the old `deploy/install-kallon-watchdog.sh` +
 > hand-edited `wg0.conf` path. Use `scripts/kallon-jetson-install.sh` instead.
@@ -77,7 +77,7 @@ registry, automated peer-add. Path P validates operability before you add `cust_
 
 ### 1.1 Machines & access
 
-| Host | You need | Your bench (from `kallon_current_state.md`) |
+| Host | You need | Lab bench example (`legacy/bench-snapshot-2025-05.md`) |
 |------|----------|---------------------------------------------|
 | **Windows Server** | Postgres 16, Python 3.10+, Git Bash, OpenSSH | **Control plane** — registry + enrollment API (Path P) |
 | **Jetson** | SSH as `khalifa`, sudo | `192.168.1.246` (Wi-Fi), repo at `/home/khalifa/kallon` |
@@ -245,7 +245,7 @@ python -m registry.cli register-tower --slug lab --serial 1
 > **Important:** The plaintext enrollment token is shown **once**. Paste it into
 > `/etc/kallon/device.env` on the Jetson as `ENROLLMENT_TOKEN=...`. Never commit it.
 
-**Point registry at your live hub** (use values from `kallon_current_state.md` §6):
+**Point registry at your live hub** (use values from `legacy/bench-snapshot-2025-05.md` §6 or your live hub):
 
 ```powershell
 python -m registry.cli set-hub --customer cust_lab `
@@ -602,7 +602,7 @@ python infra/hub-provisioner/cli.py cust_acme \
 | If boto3 error | `pip install boto3`; configure AWS credentials |
 | If SSH timeout | Lightsail instance still booting — wait and retry init |
 
-See `docs/customer-gateway.md` for Option C (manual host) details.
+See `docs/postgres-windows-server-setup.md` §8 for Option C (manual host) details.
 
 ---
 
@@ -712,13 +712,13 @@ python -m registry.cli register-tower --slug lab --serial 2
 |------------|------|
 | Stand up **production control plane** (Windows Server) | **`docs/postgres-windows-server-setup.md`** |
 | **End-to-end** flow (Paths A / P / Jetson) | **This doc** |
-| See what's **already running** on bench | `kallon_current_state.md` |
-| Understand **architecture / phases** | `kallon_mass_deployment_roadmap.md` |
-| Provision a **new customer hub** | `docs/customer-gateway.md` |
+| See what's **already running** on bench | `legacy/bench-snapshot-2025-05.md` (May 2025 — re-probe for current) |
+| Understand **architecture / phases** | `planning/mass-deployment-roadmap.md` |
+| Provision a **new customer hub** | `docs/postgres-windows-server-setup.md` §8 |
 | Wire the **dashboard** | `docs/alert-webhook.md` |
-| **ONVIF/PTZ CLI** (legacy path) | `HOW_TO_USE.md` |
-| Track **remaining work** | `kallon_work_plan.md` |
+| **ONVIF/PTZ CLI** | `docs/dev-onvif-ptz.md` |
+| Track **remaining work** | `planning/work-plan.md` |
 
 ---
 
-*Keep in sync with `field-test` branch. Report doc gaps in `kallon_work_plan.md`.*
+*Keep in sync with `field-test` branch. Report doc gaps in `planning/work-plan.md`.*

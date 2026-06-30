@@ -1,5 +1,9 @@
 # Jetson lab walkthrough — steps 8–10 (no managed switch)
 
+> **ARCHIVED — May 2025 manual lab path.** Superseded by `scripts/kallon-jetson-install.sh` (modules 00–99) and [`docs/field-test-setup.md`](../docs/field-test-setup.md).
+>
+> **Follow instead:** [`docs/README.md`](../docs/README.md).
+
 **Scope:** Phase 3 prep (WireGuard + mediamtx), provisioning/watchdog scripts, and what to defer until hardware arrives.  
 **Prerequisite:** Jetson on a LAN with internet; camera reachable from Jetson (direct Ethernet or home router).  
 **Not required:** PoE managed switch, NVMe SSD, LTE modem, tamper sensors.
@@ -51,7 +55,7 @@ sudo rm -rf /etc/systemd/system/wg-quick@wg0.service.d
 
 For a **full lab reset**, also on the **VPS**: `sudo wg-quick down wg0`, remove `/etc/wireguard/`*, regenerate gateway keys (8.4), open **UDP 51820** in Lightsail, then redo 8.3–8.5 so keys match.
 
-**Camera route without netplan:** if `/etc/netplan/` does not exist on the Jetson, use `kallon-camera-route.service` (see `kallon_mass_deployment_roadmap.md` §6).
+**Camera route without netplan:** if `/etc/netplan/` does not exist on the Jetson, use `kallon-camera-route.service` (see `planning/mass-deployment-roadmap.md` §6).
 
 ### 8.1 Install on Jetson
 
@@ -434,7 +438,7 @@ Run as `kallon-watchdog.service` with `Restart=on-failure` (same pattern as `kal
 | In repo (`kallon-sentry`)            | On device only                                                                |
 | ------------------------------------ | ----------------------------------------------------------------------------- |
 | `deploy/*.example`, script templates | `/etc/wireguard/*.private`, `/etc/kallon/device.env`, `/etc/kallon/alert.key` |
-| `HOW_TO_USE.md`, this guide          | `/etc/systemd/system/*.service` (installed from examples)                     |
+| `docs/dev-onvif-ptz.md`, this guide   | `/etc/systemd/system/*.service` (installed from examples)                     |
 
 
 ---
@@ -485,9 +489,9 @@ ffprobe -rtsp_transport tcp rtsp://127.0.0.1:8554/cam1 # on Jetson, local
 
 ## Related docs
 
-- `kallon_sovereign_stack_brief.md` — full phased plan and exit criteria
-- `kallon_mass_deployment_roadmap.md` — lab → factory → customer deploy checklist
-- `HOW_TO_USE.md` — ONVIF / PTZ daemon usage
+- `planning/sovereign-stack-brief.md` — full phased plan and exit criteria
+- `planning/mass-deployment-roadmap.md` — lab → factory → customer deploy checklist
+- `docs/dev-onvif-ptz.md` — ONVIF / PTZ daemon usage
 - `deploy/kallon-ptz-daemon.service.example` — PTZ systemd unit
 
 ---

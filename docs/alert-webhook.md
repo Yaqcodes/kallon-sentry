@@ -57,10 +57,11 @@ X-Kallon-Signature: sha256=<hex>
 ```json
 {
   "device_id": "kln_acme_000042",
-  "type": "tamper_impact",
+  "timestamp_utc": "2025-06-05T14:30:00Z",
+  "nonce": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+  "alert_type": "tamper_impact",
   "severity": "critical",
-  "ts": 1717600000,
-  "detail": {
+  "details": {
     "axis_mg": 312,
     "threshold_mg": 150
   }
@@ -70,10 +71,11 @@ X-Kallon-Signature: sha256=<hex>
 | Field | Type | Notes |
 |-------|------|-------|
 | `device_id` | string | `kln_<slug>_<serial>` |
-| `type` | string | `tamper_impact`, `enclosure_open`, `stream_fail`, `temp_high`, `temp_clear`, `light_change`, … |
+| `timestamp_utc` | string | RFC 3339 UTC (e.g. `2025-06-05T14:30:00Z`) |
+| `nonce` | string | UUID v4 — unique per POST |
+| `alert_type` | string | `tamper_impact`, `enclosure_open`, `stream_fail`, `temp_high`, `temp_clear`, `light_change`, … |
 | `severity` | string | `info` \| `warning` \| `critical` |
-| `ts` | integer | Unix seconds (UTC) |
-| `detail` | object | type-specific payload (optional) |
+| `details` | object | type-specific payload (optional) |
 
 > The canonical body is **compact JSON with sorted keys** (`json.dumps(obj,
 > sort_keys=True, separators=(",", ":"))`). The signature is computed over those
@@ -116,10 +118,10 @@ tested in `tests/test_alert_hmac.py`.
 
 ### 2.4 Delivery semantics
 
-- **Dedup:** the watchdog suppresses repeat alerts of the same `type` within a
+- **Dedup:** the watchdog suppresses repeat alerts of the same `alert_type` within a
   60 s window.
 - **Retries:** 3 attempts with backoff on transport failure.
-- **At-least-once:** consumers must treat `(device_id, type, ts)` as an
+- **At-least-once:** consumers should treat `(device_id, alert_type, timestamp_utc, nonce)` as an
   idempotency key.
 
 ---

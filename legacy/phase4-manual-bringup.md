@@ -1,5 +1,9 @@
 # Phase 4 — Getting the Alert System Running (Step-by-Step)
 
+> **ARCHIVED — May 2025 manual bring-up.** Superseded by installer module `80-watchdogs.sh` and [`docs/field-test-setup.md`](../docs/field-test-setup.md) §5.
+>
+> **Follow instead:** [`docs/README.md`](../docs/README.md).
+
 Everything below assumes:
 
 - Jetson Orin Nano is on `192.168.1.246`, user `khalifa`, repo at `/home/khalifa/kallon`

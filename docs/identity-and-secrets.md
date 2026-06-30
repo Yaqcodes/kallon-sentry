@@ -152,4 +152,4 @@ actor `enrollment-api`; the CLI uses `cli` (override with `--actor`).
 
 ---
 
-*Keep in sync with `registry/identity.py` and `kallon_mass_deployment_roadmap.md` §3.*
+*Keep in sync with `registry/identity.py` and `planning/mass-deployment-roadmap.md` §3.*

@@ -9,12 +9,11 @@ on `localhost` only.
 
 | Related doc | Role |
 |-------------|------|
+| **`docs/README.md`** | Documentation index |
 | **`docs/architecture-setup-guide.md`** | **Layered setup walkthrough** — nodes, diagrams, commands → resources |
 | **`docs/field-test-setup.md`** | **End-to-end flow** — Path A → Path P → §5 Jetson |
-| `kallon_mass_deployment_roadmap.md` | Registry design §5, Phase 2–3 deliverables |
-| `Considering physical server for VPS.md` | Control plane layout, exposure rules |
+| `planning/mass-deployment-roadmap.md` | Registry design §5, Phase 2–3 deliverables; Appendix A (control plane) |
 | `docs/identity-and-secrets.md` | `DATABASE_URL`, enrollment tokens, HMAC keys |
-| `docs/customer-gateway.md` | Hub provision + peer-add contract |
 | `docs/order-fulfillment.md` | Per-order `kallon-fulfill-order` automation |
 
 > **Security:** Postgres must **not** be exposed to the public internet. Bind to

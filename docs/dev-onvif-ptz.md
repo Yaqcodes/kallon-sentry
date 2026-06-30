@@ -53,21 +53,20 @@ Copy **`deploy/kallon-ptz-daemon.service.example`** to `/etc/systemd/system/` on
 
 **`kallon_watchdog.py`** is a single systemd-managed daemon that watches the camera, CPU temperature, and the tamper sensors wired to the 40-pin header (MPU-6050 on I2C bus 7, reed switch on pin 31, digital LDR on pin 33, MPU INT on pin 29). It posts HMAC-SHA256-signed JSON alerts to the customer NOC over the WireGuard tunnel, with up to 3 retries and a 60 s per-type dedup window.
 
-Pin assignments and sensor logic are documented in **`kallon_hardware_wiring.md`** (Rev A).
+Pin assignments and sensor logic are documented in **`docs/hardware-wiring.md`** (Rev A).
 
-Install (run on the Jetson):
+Production towers use the modular installer (`scripts/kallon-jetson-install.sh`, module `80-watchdogs.sh`). For a manual bench install:
 
 ```bash
 cd /home/khalifa/kallon
-sudo deploy/install-kallon-watchdog.sh
+sudo scripts/kallon-jetson-install.sh --env /etc/kallon/device.env --only-module 80
 
-# then edit the templates the script wrote:
-sudoedit /etc/kallon/device.env
-sudoedit /etc/kallon/alert.key      # must match the NOC verifier
-
+# or enable after full install:
 sudo systemctl enable --now kallon-watchdog
 journalctl -u kallon-watchdog -f
 ```
+
+Ensure `/etc/kallon/device.env` and `/etc/kallon/alert.key` match the hub (see `docs/field-test-setup.md` §5).
 
 Bench check without enabling the service yet:
 
