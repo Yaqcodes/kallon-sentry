@@ -183,19 +183,82 @@ In Omada → **Settings → Networks**:
 | VLAN ID | `10` |
 | Purpose | No DHCP server — cameras use static IPs |
 
-### 3.4 Assign ports to VLAN 10
+### 3.4 Assign ports to VLAN 10 (Omada “Access” ports)
 
-In Omada → **Devices → [switch] → Ports**:
+**Port map** (physical wiring — which cable goes where):
 
-| Port | Device | Mode | Native VLAN |
-|------|--------|------|-------------|
-| 1 | Mirror laptop (Step 11 only) | Access | 10 |
-| 2 | Jetson `enP8p1s0` | Access | 10 |
-| 3 | Camera 1 | Access | 10 |
-| 4 | Camera 2 (future) | Access | 10 |
-| 5 | Camera 3 (future) | Access | 10 |
-| 6 | Camera 4 (future) | Access | 10 |
-| 7–8 | Spare | Disabled or VLAN 10 | — |
+| Port | Device | PoE |
+|------|--------|-----|
+| 1 | Mirror laptop (Step 11 only) | off |
+| 2 | Jetson `enP8p1s0` | off |
+| 3 | Camera 1 | on |
+| 4 | Camera 2 (future) | on |
+| 5 | Camera 3 (future) | on |
+| 6 | Camera 4 (future) | on |
+| 7 | PC for adoption / lab (optional) | off |
+| 8 | Spare | — |
+
+**Omada v6: “Type” is read-only — you do not pick Access vs Trunk**
+
+On adopted switches, the **Type** column shows **Trunk** on every port until VLAN
+tagging is tightened. There is no dropdown to change Type. Omada labels a port **Access**
+only when **one** untagged VLAN is allowed (the native / PVID) and **no** tagged VLANs
+are carried.
+
+The **Profile** dropdown on **Device Config → Switch → Switch Ports** (All / Default /
+Disable) is **not** VLAN mode and will not fix camera reachability.
+
+**Configure each production port (2–6, and 1 for mirror capture)**
+
+1. **Devices → [SG2210P] → Ports** → select port(s) → **Edit** (batch ports 2–6 is fine).
+2. Set **Port Configuration** to **Custom** (not “follow profile” with the factory default).
+3. Under **VLAN**:
+   - **Native Network** → `CAMERA` (VLAN **10**)
+   - **Network tag settings** → **Block All**
+     (untagged = PVID only; tagged list empty — this is what makes Type flip to **Access**)
+4. Enable **PoE** on camera ports 3–6.
+5. **Apply** / **Save**. Refresh the port list — **Type** should read **Access**.
+
+**Reusable profile (optional):** **Device Config → Switch → Switch Ports → Port Profile**
+→ create e.g. `CAMERA-ACCESS` with Native Network = VLAN 10 and tag settings = **Block All**
+→ assign that profile to ports 2–6.
+
+**Verify in Omada:** on the switch **Ports** view, filter or colour-code **VLAN 10** — ports 2
+and 3 must be **Native / Untagged** for VLAN 10 and must **not** be **Tagged** on VLAN 1
+or other VLANs.
+
+**Adoption PC (port 7 only):** while adopting or troubleshooting the switch, set port 7 to
+**Custom → Native Network = Default (VLAN 1) → Block All**, PC at `192.168.0.100/24`. Do
+**not** put the Jetson or cameras on VLAN 1. After adoption, either disable port 7 or move
+it to VLAN 10 if you need a bench laptop on `192.168.10.x`.
+
+**Standalone UI fallback** (if Omada VLAN options are missing): browser → `http://<switch-ip>`
+→ **VLAN → 802.1Q VLAN** → add VLAN 10; set ports 2–6 as **Untagged** members of VLAN 10 only.
+
+**How the Jetson finds cameras (IP vs switch port number)**
+
+The Jetson **never** uses switch port numbers (3, 4, …). It uses **IP addresses** from
+`/etc/kallon/device.env`:
+
+- `CAMERA_IFACE=enP8p1s0` — wired NIC plugged into switch **port 2**
+- `CAMERA_JETSON_IP=192.168.10.2/24` — Jetson’s address on that segment
+- `CAMERA_IPS=192.168.10.108` — camera IP(s); installer pins each `/32` to `CAMERA_IFACE`
+
+So “which port is the Jetson checking?” means: **whatever IP is in `CAMERA_IPS`, reached
+via `enP8p1s0`**. The switch must put **port 2 (Jetson)** and **port 3 (camera)** on the
+**same untagged VLAN 10** so ARP and RTSP work. Moving the camera to switch port 4 does
+not matter as long as that port is also Access VLAN 10 and the camera keeps `192.168.10.108`.
+
+```bash
+# On Jetson — routing (Layer 3 policy), not switch port numbers:
+ip route get 192.168.10.108   # must show: dev enP8p1s0
+ip addr show enP8p1s0         # must show: 192.168.10.2/24
+grep CAMERA_IPS /etc/kallon/device.env
+```
+
+**Done when:** Omada shows **Access** on ports 2–6, `ping -c 3 192.168.10.108` from the
+Jetson succeeds, and `ip neigh show dev enP8p1s0` lists `192.168.10.108` as **REACHABLE**
+(not `FAILED`).
 
 ### 3.5 ACL — cameras cannot reach the internet
 
@@ -224,10 +287,15 @@ entire VLAN 10 network object.
 | Priority | Source type | Source | Destination type | Destination | Action |
 |----------|-------------|--------|------------------|-------------|--------|
 | 1 | IP Group | `cameras` | IP Group | `jetson-eth` | **Permit** |
-| 2 | IP Group | `cameras` | Any | Any | **Deny** |
+| 2 | IP Group | `jetson-eth` | IP Group | `cameras` | **Permit** |
+| 3 | IP Group | `cameras` | Any | Any | **Deny** |
 
-Rule 1 allows cameras to reach the Jetson. Rule 2 drops everything else from the camera
-subnet — no internet, no AP, no other hosts.
+Rules 1–2 allow camera ↔ Jetson traffic (RTSP, ARP replies, ping in both directions).
+Rule 3 drops everything else sourced from the camera subnet — no internet, no AP, no other
+hosts.
+
+If ping from the Jetson to `.108` still fails with VLAN 10 correct, **temporarily disable
+the Switch ACL** to test. Re-enable with rules 1–3 above once L2 works.
 
 ### 3.6 Mirror port (for Step 11 zero-egress capture)
 
@@ -777,9 +845,13 @@ sudo smartctl -a /dev/nvme0
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
+| Omada **Type** stuck on **Trunk** | Default **Allow All** tag settings on port profile | Per port: **Custom → Native VLAN 10 → Block All**; Type becomes **Access** |
+| `ip route get 192.168.10.108` → `enP8p1s0` but ping **Host Unreachable** | L2 split (VLAN mismatch), ACL, camera offline, or wrong IP | Same VLAN 10 Access on ports 2+3; disable ACL to test; `ip neigh` for `FAILED`; camera direct to Jetson; PC on VLAN 10 port ping `.108` |
+| `ip neigh` shows `.108 FAILED` | No ARP reply — camera not on same segment or powered | PoE on camera port; confirm camera LED; verify static IP; bypass switch (camera → Jetson direct) |
 | `ip route get 192.168.10.108` → `wlP1p1s0` | Camera traffic leaking to Wi-Fi | Use `/24` not `/32` on `CAMERA_JETSON_IP`; re-run modules 30 + 60 |
 | SSH drops after install | Default route added to eth | Never set gateway on `CAMERA_IFACE`; re-run module 30 |
 | Module 50: `WARN: not a mountpoint` | NVMe not mounted at `RECORD_PATH` | Complete Step 2 before running installer with `RECORD_ENABLE=1` |
+| mediamtx crash loop: `unknown field "rtspTransports"` | YAML field renamed in mediamtx ≥1.11; binary is v1.9.3 | Use `protocols: [tcp]` not `rtspTransports`; `git pull` and re-run module 50 |
 | mediamtx starts, no recording files | `sourceOnDemand: yes` still in yml | Confirm `RECORD_ENABLE=1` in device.env; re-run module 50; check `sudo cat /etc/mediamtx.yml` |
 | Enrollment `401` | Bad enrollment token | Re-run `register-tower` on server; update `ENROLLMENT_TOKEN` |
 | Enrollment `409` | Hub not active | Check `list-customers`; re-run fulfillment |

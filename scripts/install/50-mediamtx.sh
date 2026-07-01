@@ -68,14 +68,15 @@ render_yml() {
   {
     echo "# /etc/mediamtx.yml — rendered by 50-mediamtx.sh (do not hand-edit)."
     echo "rtspAddress: :8554"
-    echo "rtspTransports: [tcp]"
+    echo "protocols: [tcp]"
     echo "paths:"
     local i=1 ip
     for ip in "${cams[@]}"; do
       ip="${ip// /}"
       [[ -n "$ip" ]] || continue
       echo "  cam${i}:"
-      echo "    source: rtsp://${CAMERA_RTSP_USER}:${CAMERA_PASSWORD}@${ip}:554${CAMERA_RTSP_PATH}"
+      # Quote source — Dahua paths contain ? and & which break YAML if unquoted.
+      echo "    source: \"rtsp://${CAMERA_RTSP_USER}:${CAMERA_PASSWORD}@${ip}:554${CAMERA_RTSP_PATH}\""
       echo "    sourceOnDemand: ${on_demand}"
       echo "    rtspTransport: tcp"
       if [[ "${RECORD_ENABLE}" == "1" ]]; then
