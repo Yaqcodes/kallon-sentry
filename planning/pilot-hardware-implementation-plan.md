@@ -717,9 +717,10 @@ From the hub (sanity check that the tower serves RTSP):
 ffprobe -rtsp_transport tcp rtsp://10.50.0.2:8554/cam1
 ```
 
-**Hubs provisioned before the forwarding fix** (one-time, idempotent):
+**Hubs provisioned before the forwarding fix** (one-time, idempotent — run **on the hub VPS**, not the Jetson):
 
 ```bash
+# On the hub (SSH ubuntu@<hub-public-ip>):
 sudo bash scripts/kallon-gateway-ensure-forwarding.sh
 ```
 

@@ -23,7 +23,8 @@ echo "net.ipv4.ip_forward = 1" > "$sysctl_file"
 sysctl -p "$sysctl_file" >/dev/null
 log "ip_forward enabled"
 
-command -v ufw >/dev/null 2>&1 || die "ufw not installed"
+command -v ufw >/dev/null 2>&1 || die \
+  "ufw not installed — this script runs on the customer VPN hub, not on a tower/Jetson. Towers use scripts/install/90-firewall.sh (8554 on lo + wg0 only)."
 
 ufw route allow in on wg0 out on wg0 >/dev/null 2>&1 || true
 if ufw status 2>/dev/null | grep -q "Status: active"; then
