@@ -695,14 +695,35 @@ sudo scripts/kallon-acceptance.sh --env /etc/kallon/device.env
 
 Final line must be: `ACCEPTANCE PASSED`
 
-### 9.2 RTSP over VPN
+### 9.2 RTSP over VPN (NOC / dashboard peer)
 
-From a host that has a WireGuard peer in `10.50.0.0/24` (your NOC laptop or the hub itself):
+**Topology:** towers and operator laptops are **separate WireGuard peers** on the hub.
+The hub routes between them (`ip_forward`). `kallon-gateway-init.sh` must allow UFW
+**forward** on `wg0 → wg0` (`ufw route allow in on wg0 out on wg0`). Without that rule,
+ping to a tower VPN IP may work but **TCP (RTSP :8554) fails** from the NOC peer.
+
+From a host with a WireGuard peer in `10.50.0.0/24` (your NOC laptop):
+
+```powershell
+# Windows — port must succeed before VLC/ffprobe
+Test-NetConnection 10.50.0.2 -Port 8554
+ffprobe -rtsp_transport tcp rtsp://10.50.0.2:8554/cam1
+# VLC: use --rtsp-tcp or :rtsp-tcp in stream options
+```
+
+From the hub (sanity check that the tower serves RTSP):
 
 ```bash
 ffprobe -rtsp_transport tcp rtsp://10.50.0.2:8554/cam1
-# expected: stream info printed (h264 or hevc)
 ```
+
+**Hubs provisioned before the forwarding fix** (one-time, idempotent):
+
+```bash
+sudo bash scripts/kallon-gateway-ensure-forwarding.sh
+```
+
+New hubs get this automatically from `kallon-gateway-init.sh` via hub-provisioner.
 
 ### 9.3 HMAC alert over VPN
 
@@ -857,6 +878,7 @@ sudo smartctl -a /dev/nvme0
 | Enrollment `409` | Hub not active | Check `list-customers`; re-run fulfillment |
 | WG up, no handshake | Peer-add failed | Check enrollment API logs; run `kallon-hub-ssh-verify.ps1` |
 | Alerts return 401 | HMAC key mismatch | Re-sync `/etc/kallon/alert.key` tower ↔ hub; restart both services |
+| RTSP works locally, fails over VPN from NOC PC | Hub UFW blocks `wg0 → wg0` FORWARD | `kallon-gateway-init.sh` includes `ufw route allow`; existing hubs: `kallon-gateway-ensure-forwarding.sh` |
 | RTSP works locally, fails over VPN | iptables or peer missing | Run module 90; `sudo wg show wg0` on both ends |
 | Zero-egress capture shows Dahua traffic | P2P/DMSS still active | Return to Step 4; disable cloud features; repeat capture |
 | Re-test enrollment | `.enrolled` guard blocking | `sudo rm /etc/kallon/.enrolled` then re-run `kallon-enroll.sh` |

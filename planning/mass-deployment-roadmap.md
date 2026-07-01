@@ -398,7 +398,7 @@ No AWS, no Terraform, no manual WireGuard editing. Swapping VPS vendor = new `Hu
 | 2 | Generate gateway WG keypair → `/etc/wireguard/gateway.private` + `.public` |
 | 3 | Write `/etc/wireguard/wg0.conf` (`[Interface]` only; peers added later) |
 | 4 | `net.ipv4.ip_forward = 1` |
-| 5 | UFW: **UDP 51820** open; **TCP 8080** from `vpn_subnet` only; deny rest |
+| 5 | UFW: **UDP 51820** open; **TCP 8080** from `vpn_subnet`; **`ufw route allow in on wg0 out on wg0`** (peer forwarding); deny rest |
 | 6 | Install alert receiver as systemd (`kallon-alert-listener.service`) |
 | 7 | Write customer row to registry (gateway pubkey, endpoint, status=active) |
 | 8 | Output **`gateway_manifest.json`** (see below) |

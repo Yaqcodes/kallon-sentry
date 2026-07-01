@@ -106,15 +106,18 @@ echo "net.ipv4.ip_forward = 1" > "$sysctl_file"
 sysctl -p "$sysctl_file" >/dev/null
 ok "ip_forward enabled"
 
-# 5. UFW: WG open; alert port from VPN only; deny the rest -----------------------
+# 5. UFW: WG open; alert port from VPN only; peer forwarding; deny the rest ---
 ufw --force reset >/dev/null 2>&1 || true
 ufw default deny incoming >/dev/null
 ufw default allow outgoing >/dev/null
 ufw allow OpenSSH >/dev/null 2>&1 || ufw allow 22/tcp >/dev/null
 ufw allow "${LISTEN_PORT}/udp" >/dev/null
 ufw allow from "$VPN_SUBNET" to any port "$ALERT_PORT" proto tcp >/dev/null
+# Hub-and-spoke: NOC/dashboard peers reach tower peers (RTSP :8554, SSH, etc.)
+# over the VPN. ip_forward alone is not enough — UFW drops FORWARD by default.
+ufw route allow in on wg0 out on wg0 >/dev/null
 ufw --force enable >/dev/null
-ok "ufw: ${LISTEN_PORT}/udp open; ${ALERT_PORT}/tcp from ${VPN_SUBNET} only"
+ok "ufw: ${LISTEN_PORT}/udp; ${ALERT_PORT}/tcp from ${VPN_SUBNET}; wg0 peer forwarding"
 
 # 6. alert listener (systemd) --------------------------------------------------
 install -d -m 0750 /etc/kallon
@@ -163,6 +166,15 @@ systemctl enable --now wg-quick@wg0 >/dev/null 2>&1 || die "wg-quick@wg0 failed"
 if [[ -f "$KALLON_DIR/alert_listener.py" ]]; then
   systemctl enable --now kallon-alert-listener.service >/dev/null 2>&1 \
     || log "alert listener not started (will start once wg0 is up)."
+fi
+
+# 7b. Re-apply peer forwarding now wg0 exists (idempotent).
+_ensure="${BASH_SOURCE%/*}/kallon-gateway-ensure-forwarding.sh"
+if [[ -f "$_ensure" ]]; then
+  bash "$_ensure"
+else
+  ufw route allow in on wg0 out on wg0 >/dev/null 2>&1 || true
+  ufw reload >/dev/null 2>&1 || true
 fi
 
 # 8. emit manifest (stdout) ----------------------------------------------------
