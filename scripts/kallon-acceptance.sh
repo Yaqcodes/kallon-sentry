@@ -74,7 +74,12 @@ if command -v ffprobe >/dev/null 2>&1; then
          -show_entries stream=codec_type -of csv=p=0 >/dev/null 2>&1; then
       PASS "ffprobe $url"
     else
-      FAIL "ffprobe $url (camera/mediamtx down?)"
+      cam_ip="$(printf '%s' "${cams[$((i-1))]:-}" | tr -d ' ')"
+      hint="camera/mediamtx down?"
+      if [[ -n "$cam_ip" ]] && ! ping -c1 -W2 "$cam_ip" >/dev/null 2>&1; then
+        hint="no ping to $cam_ip (wrong IP, VLAN, or camera offline?)"
+      fi
+      FAIL "ffprobe $url ($hint)"
     fi
     i=$((i+1))
   done
@@ -87,7 +92,7 @@ hdr "Alert HMAC dry-run"
 KEY="${ALERT_KEY_PATH:-/etc/kallon/alert.key}"
 if [[ -f "$KEY" ]]; then
   payload='{"device_id":"'"${DEVICE_ID:-unknown}"'","type":"acceptance_dryrun","ts":0}'
-  sig="$(printf '%s' "$payload" | openssl dgst -sha256 -hmac "$(cat "$KEY")" -binary 2>/dev/null | xxd -p -c256)"
+  sig="$(printf '%s' "$payload" | openssl dgst -sha256 -hmac "$(tr -d '\0' < "$KEY")" -binary 2>/dev/null | xxd -p -c256)"
   if [[ -n "$sig" ]]; then
     PASS "HMAC signature computed (X-Kallon-Signature: sha256=${sig:0:16}...)"
   else

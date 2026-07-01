@@ -62,6 +62,12 @@ EOF
   systemctl daemon-reload
   systemctl enable kallon-camera-route.service >/dev/null 2>&1 || true
   systemctl restart kallon-camera-route.service || warn "camera-route service failed (iface $CAMERA_IFACE may be down)."
+  # Module 50 may have started mediamtx before this unit assigned CAMERA_JETSON_IP.
+  if systemctl is-enabled mediamtx.service &>/dev/null; then
+    systemctl restart mediamtx.service >/dev/null 2>&1 \
+      && ok "mediamtx restarted after camera routes applied" \
+      || warn "mediamtx restart failed (check journalctl -u mediamtx)"
+  fi
   ok "camera-route module complete"
 }
 
