@@ -82,9 +82,14 @@ def render_device_env(
         "GPIO_LDR_PIN=33",
         "MPU_ACCEL_THRESHOLD_MG=150",
         "",
-        "ENABLE_NVME=0",
+        "ENABLE_NVME=1",
         "NVME_DEVICE=/dev/nvme0",
         "ENABLE_POWER_ADC=0",
+        "",
+        "RECORD_ENABLE=0",
+        "RECORD_PATH=/var/kallon/recordings",
+        "RECORD_RETENTION=24h",
+        "RECORD_SEGMENT_DURATION=1h",
     ]
     return "\n".join(lines) + "\n"
 

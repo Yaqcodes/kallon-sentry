@@ -40,8 +40,17 @@ render_yml() {
   default_var CAMERA_RTSP_USER admin
   default_var CAMERA_RTSP_PATH '/cam/realmonitor?channel=1&subtype=1'
   default_var CAMERA_PASSWORD 'CAM_PASSWORD'
+  default_var RECORD_ENABLE 0
+  default_var RECORD_PATH /var/kallon/recordings
+  default_var RECORD_RETENTION 24h
+  default_var RECORD_SEGMENT_DURATION 1h
 
   local -a cams; split_csv "$CAMERA_IPS" cams
+
+  # Recording requires a persistent source connection; live-only can be on-demand.
+  local on_demand="yes"
+  [[ "${RECORD_ENABLE}" == "1" ]] && on_demand="no"
+
   local tmp; tmp="$(mktemp)"
   {
     echo "# /etc/mediamtx.yml — rendered by 50-mediamtx.sh (do not hand-edit)."
@@ -54,8 +63,15 @@ render_yml() {
       [[ -n "$ip" ]] || continue
       echo "  cam${i}:"
       echo "    source: rtsp://${CAMERA_RTSP_USER}:${CAMERA_PASSWORD}@${ip}:554${CAMERA_RTSP_PATH}"
-      echo "    sourceOnDemand: yes"
+      echo "    sourceOnDemand: ${on_demand}"
       echo "    rtspTransport: tcp"
+      if [[ "${RECORD_ENABLE}" == "1" ]]; then
+        echo "    record: yes"
+        echo "    recordPath: ${RECORD_PATH}/%path/%Y-%m-%d_%H-%M-%S-%f"
+        echo "    recordFormat: fmp4"
+        echo "    recordPartDuration: ${RECORD_SEGMENT_DURATION}"
+        echo "    recordDeleteAfter: ${RECORD_RETENTION}"
+      fi
       i=$((i+1))
     done
   } > "$tmp"
@@ -66,15 +82,26 @@ render_yml() {
   else
     install -m 0640 -o root -g khalifa "$tmp" "$MEDIAMTX_YML"
     rm -f "$tmp"
-    ok "rendered $MEDIAMTX_YML for ${#cams[@]} camera(s)"
+    local rec_note=""
+    [[ "${RECORD_ENABLE}" == "1" ]] && rec_note=" (recording → ${RECORD_PATH}, retention ${RECORD_RETENTION})"
+    ok "rendered $MEDIAMTX_YML for ${#cams[@]} camera(s)${rec_note}"
   fi
 }
 
 main() {
   require_root
   load_env
+  default_var RECORD_ENABLE 0
+  default_var RECORD_PATH /var/kallon/recordings
   install_binary
   render_yml
+  if [[ "${RECORD_ENABLE}" == "1" ]]; then
+    if ! mountpoint -q "${RECORD_PATH}" 2>/dev/null; then
+      warn "RECORD_ENABLE=1 but ${RECORD_PATH} is not a separate mountpoint — recordings will land on the OS partition."
+    fi
+    ensure_dir "${RECORD_PATH}" 0755 root root
+    ok "recording directory ensured: ${RECORD_PATH}"
+  fi
   install_if_changed "$REPO_DIR/deploy/mediamtx.service.example" /etc/systemd/system/mediamtx.service 0644 || true
   systemctl daemon-reload
   systemctl enable --now mediamtx.service >/dev/null 2>&1 || warn "mediamtx.service did not start (check cameras)."
