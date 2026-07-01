@@ -492,14 +492,15 @@ NVME_DEVICE=/dev/nvme0
 # Recording (turn on once NVMe is mounted — Step 2 complete)
 RECORD_ENABLE=1
 RECORD_PATH=/var/kallon/recordings
-RECORD_RETENTION=24h
-RECORD_SEGMENT_DURATION=1h
+RECORD_MEDIAMTX_DELETE_AFTER=24h
+RECORD_MEDIAMTX_SEGMENT_FILE_DURATION=1h
 
 RTSP_URLS=rtsp://127.0.0.1:8554/cam1
 ```
 
-> **RECORD_RETENTION** is the only knob to turn for retention.
-> `24h` = 1 day, `48h` = 2 days, `168h` = 1 week.
+> **Retention:** `RECORD_MEDIAMTX_DELETE_AFTER` → mediamtx `recordDeleteAfter` (`24h`, `48h`, `168h` …).
+> **Segment file length:** `RECORD_MEDIAMTX_SEGMENT_FILE_DURATION` → `recordSegmentDuration` (default `1h`).
+> Part flush (`recordPartDuration`) is fixed at `1s` in the installer — do not confuse with segment file length.
 
 Sync the alert HMAC key with the hub (they must be identical):
 
@@ -545,12 +546,12 @@ sudo scripts/kallon-jetson-install.sh --env /etc/kallon/device.env --only-module
 
 # mediamtx with recording
 sudo scripts/kallon-jetson-install.sh --env /etc/kallon/device.env --only-module 50
-# expected: rendered /etc/mediamtx.yml for 1 camera(s) (recording → /var/kallon/recordings, retention 24h)
+# expected: rendered /etc/mediamtx.yml for 1 camera(s) (recording → /var/kallon/recordings, delete after 24h)
 # expected: recording directory ensured: /var/kallon/recordings
 
 # Check rendered config
 sudo cat /etc/mediamtx.yml
-# expected: record: yes  recordDeleteAfter: 24h  sourceOnDemand: no
+# expected: record: yes  recordDeleteAfter: 24h  recordSegmentDuration: 1h  recordPartDuration: 1s  sourceOnDemand: no
 ```
 
 **Critical routing assertions (must pass before proceeding):**
@@ -688,9 +689,9 @@ journalctl -u mediamtx | grep -i "source.*connected\|reading"
 ### 10.3 Retention
 
 `recordDeleteAfter: 24h` in mediamtx.yml means segments older than 24 hours are deleted
-automatically by mediamtx — no cron needed. To verify, change `RECORD_RETENTION=1h` in
+automatically by mediamtx — no cron needed. To verify, change `RECORD_MEDIAMTX_DELETE_AFTER=1h` in
 `device.env`, re-run module 50, wait 65 minutes, and confirm old files are gone. Then
-restore to `24h`.
+restore `RECORD_MEDIAMTX_DELETE_AFTER=24h`.
 
 ### 10.4 Disk space check
 
@@ -831,7 +832,7 @@ sudo smartctl -a /dev/nvme0
 | LTE modem — `WAN_FALLBACK_IFACE=usb0` | 5 | Modem hardware acquired |
 | Two-tower test | 4/3 | Second Jetson |
 | Real customer order via `kallon-fulfill-order` | 3 | Sales order |
-| Longer retention / main-stream recording | — | Adjust `RECORD_RETENTION` + `RECORD_PATH` partition size |
+| Longer retention / main-stream recording | — | Adjust `RECORD_MEDIAMTX_DELETE_AFTER` + `RECORD_PATH` partition size |
 | Golden image | 7 | Pilot sign-off complete |
 
 ---

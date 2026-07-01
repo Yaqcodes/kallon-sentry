@@ -35,6 +35,20 @@ install_binary() {
   ok "installed mediamtx ${MEDIAMTX_VERSION}"
 }
 
+resolve_record_env() {
+  # Deprecated aliases from early pilot docs — accept once, map to mediamtx field names.
+  if [[ -n "${RECORD_SEGMENT_DURATION:-}" && -z "${RECORD_MEDIAMTX_SEGMENT_FILE_DURATION:-}" ]]; then
+    RECORD_MEDIAMTX_SEGMENT_FILE_DURATION=$RECORD_SEGMENT_DURATION
+    warn "RECORD_SEGMENT_DURATION is deprecated; use RECORD_MEDIAMTX_SEGMENT_FILE_DURATION"
+  fi
+  if [[ -n "${RECORD_RETENTION:-}" && -z "${RECORD_MEDIAMTX_DELETE_AFTER:-}" ]]; then
+    RECORD_MEDIAMTX_DELETE_AFTER=$RECORD_RETENTION
+    warn "RECORD_RETENTION is deprecated; use RECORD_MEDIAMTX_DELETE_AFTER"
+  fi
+  default_var RECORD_MEDIAMTX_SEGMENT_FILE_DURATION 1h
+  default_var RECORD_MEDIAMTX_DELETE_AFTER 24h
+}
+
 render_yml() {
   require_var CAMERA_IPS
   default_var CAMERA_RTSP_USER admin
@@ -42,8 +56,7 @@ render_yml() {
   default_var CAMERA_PASSWORD 'CAM_PASSWORD'
   default_var RECORD_ENABLE 0
   default_var RECORD_PATH /var/kallon/recordings
-  default_var RECORD_RETENTION 24h
-  default_var RECORD_SEGMENT_DURATION 1h
+  resolve_record_env
 
   local -a cams; split_csv "$CAMERA_IPS" cams
 
@@ -70,8 +83,8 @@ render_yml() {
         echo "    recordPath: ${RECORD_PATH}/%path/%Y-%m-%d_%H-%M-%S-%f"
         echo "    recordFormat: fmp4"
         echo "    recordPartDuration: 1s"
-        echo "    recordSegmentDuration: ${RECORD_SEGMENT_DURATION}"
-        echo "    recordDeleteAfter: ${RECORD_RETENTION}"
+        echo "    recordSegmentDuration: ${RECORD_MEDIAMTX_SEGMENT_FILE_DURATION}"
+        echo "    recordDeleteAfter: ${RECORD_MEDIAMTX_DELETE_AFTER}"
       fi
       i=$((i+1))
     done
@@ -84,7 +97,7 @@ render_yml() {
     install -m 0640 -o root -g khalifa "$tmp" "$MEDIAMTX_YML"
     rm -f "$tmp"
     local rec_note=""
-    [[ "${RECORD_ENABLE}" == "1" ]] && rec_note=" (recording → ${RECORD_PATH}, retention ${RECORD_RETENTION})"
+    [[ "${RECORD_ENABLE}" == "1" ]] && rec_note=" (recording → ${RECORD_PATH}, delete after ${RECORD_MEDIAMTX_DELETE_AFTER})"
     ok "rendered $MEDIAMTX_YML for ${#cams[@]} camera(s)${rec_note}"
   fi
 }

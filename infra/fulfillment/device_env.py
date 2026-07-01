@@ -88,8 +88,8 @@ def render_device_env(
         "",
         "RECORD_ENABLE=0",
         "RECORD_PATH=/var/kallon/recordings",
-        "RECORD_RETENTION=24h",
-        "RECORD_SEGMENT_DURATION=1h",
+        "RECORD_MEDIAMTX_DELETE_AFTER=24h",
+        "RECORD_MEDIAMTX_SEGMENT_FILE_DURATION=1h",
     ]
     return "\n".join(lines) + "\n"
 
