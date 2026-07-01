@@ -69,7 +69,8 @@ render_yml() {
         echo "    record: yes"
         echo "    recordPath: ${RECORD_PATH}/%path/%Y-%m-%d_%H-%M-%S-%f"
         echo "    recordFormat: fmp4"
-        echo "    recordPartDuration: ${RECORD_SEGMENT_DURATION}"
+        echo "    recordPartDuration: 1s"
+        echo "    recordSegmentDuration: ${RECORD_SEGMENT_DURATION}"
         echo "    recordDeleteAfter: ${RECORD_RETENTION}"
       fi
       i=$((i+1))
