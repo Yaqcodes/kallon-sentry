@@ -113,7 +113,9 @@ Key architectural rules:
 ### 3.2 Hub
 
 - `scripts/kallon-gateway-init.sh`
-  - Bootstraps Ubuntu hub (WireGuard, firewall, alert listener service)
+  - Bootstraps Ubuntu hub (WireGuard, UFW incl. **wg0 peer forwarding**, alert listener service)
+- `scripts/kallon-gateway-ensure-forwarding.sh`
+  - Idempotent **hub-only** migration: `ufw route allow in on wg0 out on wg0` (existing hubs)
 - `scripts/kallon-gateway-add-peer.sh`
   - Idempotent WireGuard peer insertion/replacement
 - `infra/hub/alert_listener.py`
@@ -486,8 +488,10 @@ Per tower:
 
 1. Registry confirms tower `active` with assigned `vpn_ip`.
 2. Hub `wg show` displays tower peer with `/32`.
-3. RTSP check from VPN peer:
+3. RTSP check from **NOC VPN peer** (not hub shell only):
+   - `Test-NetConnection <tower-vpn-ip> -Port 8554` (Windows) or `nc -zv` (Linux)
    - `ffprobe -rtsp_transport tcp rtsp://<tower-vpn-ip>:8554/cam1`
+   - Hub must allow `wg0 → wg0` FORWARD (`kallon-gateway-init.sh` or `kallon-gateway-ensure-forwarding.sh`)
 4. Alert check:
    - trigger sensor event and confirm accepted webhook on hub listener.
 
@@ -523,7 +527,8 @@ If all pass, the tower is production-live for v1 use-case (live feed + signed al
   - `python -m registry.cli list-towers --customer <id>`
 - Hub:
   - `sudo wg show wg0`
-  - `sudo ufw status verbose`
+  - `sudo ufw status verbose` — must include route rule: **allow in on wg0 out on wg0**
+  - Legacy hubs: `sudo bash scripts/kallon-gateway-ensure-forwarding.sh` (hub VPS only)
 - Tower:
   - `sudo wg show wg0`
   - `systemctl status mediamtx kallon-watchdog kallon-ptz-daemon`
@@ -548,10 +553,11 @@ Use this sequence to isolate most field failures quickly.
 - Verify hub UDP 51820 exposure and `wg0` service state.
 - Verify tower `wg0.conf` endpoint/public key values from enroll response.
 
-4. **RTSP unavailable over VPN**
-- Check `mediamtx` service and camera source credentials/path.
-- Confirm module 90 firewall policy allows RTSP on `wg0`.
+4. **RTSP unavailable over VPN (from NOC peer)**
+- Check `mediamtx` service and camera source credentials/path on the tower.
+- Confirm tower module 90 firewall allows RTSP on `wg0` (`lo` + `wg0` only).
 - Verify client is a valid WireGuard peer in customer subnet.
+- **Hub:** confirm `ufw route allow in on wg0 out on wg0` — ping to tower can work while TCP `:8554` fails without it. Run `kallon-gateway-ensure-forwarding.sh` on the **hub** (not Jetson). See `docs/postgres-windows-server-setup.md` §8.1.
 
 5. **Alert delivery failures / signature rejection**
 - Ensure tower and hub `/etc/kallon/alert.key` values match exactly.

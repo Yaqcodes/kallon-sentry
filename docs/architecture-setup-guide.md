@@ -547,6 +547,11 @@ python -m infra.hub-provisioner.cli cust_acme `
 `ENROLLMENT_URL` inside each `device_*.env` is set from `$env:KALLON_ENROLLMENT_URL`
 (or `--enrollment-url`). Required unless `--dry-run`.
 
+**Hub VPN peer forwarding:** `kallon-gateway-init.sh` (run by hub-provisioner) sets
+`ufw route allow in on wg0 out on wg0` so NOC/dashboard peers reach tower RTSP.
+Hubs provisioned before this rule: run `kallon-gateway-ensure-forwarding.sh` once on
+the **hub VPS** — see `docs/postgres-windows-server-setup.md` §8.1.
+
 ### What fulfill-order does / does not do
 
 | Does | Does **not** |
@@ -603,13 +608,14 @@ Jetson, the file was edited in Notepad or `alert.key` was saved with a CRLF redi
 | Command | Invokes | Resources touched |
 |---------|---------|-------------------|
 | `infra.fulfillment.cli` | hub-provisioner + `register-tower` + `device_env.py` | Postgres, hub SSH, local files |
-| `kallon-gateway-init.sh` (remote) | wireguard, ufw, systemd | hub `wg0`, `alert.key`, `:51820` |
+| `kallon-gateway-init.sh` (remote) | wireguard, ufw, systemd | hub `wg0`, `alert.key`, `:51820`, **wg0 peer forwarding** |
 
 **`run_gateway_init()` copies to hub only:**
 
 | File | Purpose |
 |------|---------|
-| `scripts/kallon-gateway-init.sh` | hub bring-up |
+| `scripts/kallon-gateway-init.sh` | hub bring-up (includes `ufw route allow in on wg0 out on wg0`) |
+| `scripts/kallon-gateway-ensure-forwarding.sh` | re-applied after `wg0` is up; idempotent legacy migration |
 | `infra/hub/alert_listener.py` | HMAC alert receiver |
 | `terra-hub-ops.pub` | ops SSH access |
 
@@ -772,11 +778,18 @@ flowchart LR
 ```bash
 # On Jetson
 sudo wg show wg0
-curl -fsS http://127.0.0.1:8554/cam1   # or ffprobe locally
+ffprobe -rtsp_transport tcp rtsp://127.0.0.1:8554/cam1
 
-# From VPN peer (NOC laptop or hub-side)
+# From VPN peer (NOC laptop — not the hub shell)
+# Windows: Test-NetConnection <tower-vpn-ip> -Port 8554  → TcpTestSucceeded : True
 ffprobe -rtsp_transport tcp rtsp://10.50.0.2:8554/cam1
 ```
+
+**Hub requirement:** NOC → tower RTSP is routed **through** the hub. Fresh hubs get
+`ufw route allow in on wg0 out on wg0` from `kallon-gateway-init.sh`. Hubs provisioned
+earlier: run `kallon-gateway-ensure-forwarding.sh` on the **hub VPS** once (see
+`docs/postgres-windows-server-setup.md` §8.1). VLC/ffprobe from the hub (`10.50.0.1`)
+can work while the NOC peer fails if this rule is missing.
 
 | Path | Protocol | Address |
 |------|----------|---------|

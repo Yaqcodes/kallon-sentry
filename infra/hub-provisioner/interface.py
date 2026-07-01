@@ -19,6 +19,7 @@ from typing import Optional
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 GATEWAY_INIT = REPO_ROOT / "scripts" / "kallon-gateway-init.sh"
+GATEWAY_ENSURE_FORWARDING = REPO_ROOT / "scripts" / "kallon-gateway-ensure-forwarding.sh"
 ALERT_LISTENER = REPO_ROOT / "infra" / "hub" / "alert_listener.py"
 
 
@@ -136,6 +137,8 @@ def run_gateway_init(
         remote_cmd += f" --alert-listener-file {alert_listener_remote}"
     if dry_run:
         scp_files = [str(GATEWAY_INIT), str(ALERT_LISTENER)]
+        if GATEWAY_ENSURE_FORWARDING.exists():
+            scp_files.append(str(GATEWAY_ENSURE_FORWARDING))
         if ops_pubkey_file and Path(ops_pubkey_file).is_file():
             scp_files.append(ops_pubkey_file)
         return {
@@ -152,9 +155,13 @@ def run_gateway_init(
     _ssh = _ssh_base(host)
     subprocess.run([*_ssh, "mkdir -p /tmp/infra/hub"], check=True, timeout=60)
     _scp(host, GATEWAY_INIT, "/tmp/kallon-gateway-init.sh")
+    if GATEWAY_ENSURE_FORWARDING.exists():
+        _scp(host, GATEWAY_ENSURE_FORWARDING, "/tmp/kallon-gateway-ensure-forwarding.sh")
     if ops_pubkey_file and Path(ops_pubkey_file).is_file():
         _scp(host, Path(ops_pubkey_file), "/tmp/kallon-ops.pub")
     staged: list[str] = ["/tmp/kallon-gateway-init.sh"]
+    if GATEWAY_ENSURE_FORWARDING.exists():
+        staged.append("/tmp/kallon-gateway-ensure-forwarding.sh")
     if ops_pubkey_file and Path(ops_pubkey_file).is_file():
         staged.append("/tmp/kallon-ops.pub")
     if ALERT_LISTENER.exists():

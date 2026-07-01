@@ -242,11 +242,13 @@ No customer-built NOC or VMS required for retail. Integration spec: `../docs/ale
 *Terra platform:*
 - Postgres registry on physical server; enrollment API
 - **One hub VM per customer org** via `kallon-hub-provision` (HubProvider: Lightsail default; manual for enterprise)
+- `kallon-gateway-init.sh`: UFW **`ufw route allow in on wg0 out on wg0`** so NOC peers reach tower RTSP
+- `kallon-gateway-ensure-forwarding.sh`: idempotent fix on **existing** hubs (hub VPS only)
 - `kallon-gateway-add-peer` on hub when tower enrolls
 
 *Validation:*
 - WG auto-establishes on boot; auto-reconnect on drop ✅ (bench)
-- Live RTSP over VPN to dashboard integration endpoint
+- Live RTSP over VPN from **NOC peer** (`Test-NetConnection` tower `:8554` + ffprobe)
 - Two towers on one customer hub; two customer orgs: no cross-traffic (pcap)
 
 **Exit criteria:**

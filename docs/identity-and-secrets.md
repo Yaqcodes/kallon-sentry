@@ -61,6 +61,11 @@ allocated at enroll (`ip_allocations.next_host_octet`, row-locked in Postgres).
 | **Terra hub-ops SSH** private key | `ssh-keygen` once | Control plane `C:\kallon\secrets\terra-hub-ops.pem` | `600` | **No** |
 | Terra hub-ops SSH public key | derived | Installed on **every** hub at `gateway-init` | `644` | **No** |
 
+Hub VPN **peer forwarding** (`ufw route allow in on wg0 out on wg0`) is applied by
+`kallon-gateway-init.sh` on new hubs. Existing hubs: `kallon-gateway-ensure-forwarding.sh`
+(**hub VPS only** — not towers). Required for NOC/dashboard RTSP to towers. See
+`docs/postgres-windows-server-setup.md` §8.1.
+
 ### Enrollment API environment (production — Path P)
 
 On the Windows Server, `C:\kallon\config\enrollment-api.env` (or Linux

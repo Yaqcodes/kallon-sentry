@@ -105,7 +105,8 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[H]` hardware-g
 - [x] `infra/hub-provisioner/lightsail.py` (default Option B adapter)
 - [x] `infra/hub-provisioner/manual.py` (Option C)
 - [x] `infra/hub-provisioner/cli.py` → `kallon-hub-provision`
-- [x] `scripts/kallon-gateway-init.sh` (WG hub, UFW, alert listener systemd) + `infra/hub/alert_listener.py`
+- [x] `scripts/kallon-gateway-init.sh` (WG hub, UFW + wg0 peer forwarding, alert listener systemd) + `infra/hub/alert_listener.py`
+- [x] `scripts/kallon-gateway-ensure-forwarding.sh` (hub-only; legacy hub migration)
 - [x] `scripts/kallon-gateway-add-peer.sh` (idempotent) + canonical `infra/hub/wg_peers.py`
 - [x] Hub runbook in `../docs/postgres-windows-server-setup.md` §8 (Option B + C)
 - [x] `../docs/alert-webhook.md` (**integration contract**: alert JSON + `X-Kallon-Signature` HMAC sample + RTSP URL pattern)

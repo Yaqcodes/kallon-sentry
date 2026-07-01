@@ -514,15 +514,18 @@ sudo scripts/kallon-acceptance.sh --env /etc/kallon/device.env
 
 ### 5.5 End-to-end verification
 
-**RTSP over VPN** (from NOC PC or VPS with WG peer):
+**RTSP over VPN** (from NOC PC with WireGuard peer — **not** from the hub shell alone):
 
-```bash
+```powershell
+# Windows NOC peer (e.g. 10.50.0.10) — port check first
+Test-NetConnection 10.50.0.2 -Port 8554
 ffprobe -rtsp_transport tcp rtsp://10.50.0.2:8554/cam1
 ```
 
-| Why | Proves mediamtx rebroadcast reaches VPN consumers |
-| Expected | Stream info printed (codec h264/hevc) |
-| If timeout | Jetson `wg0` down; iptables blocking — check module 90; peer not added |
+| Why | Proves mediamtx rebroadcast reaches **peer-to-peer** VPN consumers (NOC → hub → tower) |
+| Expected | `TcpTestSucceeded : True`; stream info printed (codec h264/hevc) |
+| If ping OK but TCP 8554 fails | Hub missing `ufw route allow in on wg0 out on wg0` — run `kallon-gateway-ensure-forwarding.sh` **on the hub** (`docs/postgres-windows-server-setup.md` §8.1) |
+| If timeout after port open | Jetson `wg0` down; tower module 90 iptables; peer not added |
 
 **Alert over VPN** (trigger tamper or dry-run):
 
@@ -597,7 +600,7 @@ python infra/hub-provisioner/cli.py cust_acme \
   --subnet 10.51.0.0/24 --display-name "Acme Security"
 ```
 
-| Why | One command creates VM, opens UDP 51820, runs `kallon-gateway-init.sh`, updates registry |
+| Why | One command creates VM, opens UDP 51820, runs `kallon-gateway-init.sh` (incl. wg0 peer forwarding), updates registry |
 | Expected | `gateway_manifest_*.json` in `manifests/`; customer `status=active` |
 | If boto3 error | `pip install boto3`; configure AWS credentials |
 | If SSH timeout | Lightsail instance still booting — wait and retry init |
@@ -662,7 +665,7 @@ python3 scripts/kallon-ptz-benchmark.py --count 1000
 | WG up, no handshake (Path P) | Peer-add failed on server | API logs; `ssh ubuntu@hub` from server; check `KALLON_PEER_BACKEND=subprocess` |
 | WG up, no handshake (Path B) | `noop` peer backend | Manual `kallon-gateway-add-peer.sh` (§5.3); check UDP 51820 |
 | Alerts `401` | HMAC key mismatch | Sync `/etc/kallon/alert.key` tower ↔ hub |
-| RTSP works locally, not over VPN | iptables or peer missing | Module 90; verify `wg show` on both ends |
+| RTSP works locally, not over VPN from NOC | Hub UFW blocks `wg0→wg0` FORWARD; or tower iptables / peer | Hub: `kallon-gateway-ensure-forwarding.sh` (hub VPS only). Tower: module 90; `wg show` |
 | `apt install` fails on Jetson | No internet on Wi-Fi | `ping 1.1.1.1`; fix Wi-Fi before module 10 |
 
 ---
@@ -691,6 +694,7 @@ python -m registry.cli register-tower --slug lab --serial 2
 - [ ] Enrollment API with `KALLON_PEER_BACKEND=subprocess`; SSH to hub works
 - [ ] TLS: `https://enroll.yourdomain.com/healthz` OK
 - [ ] `cust_lab` customer `active` in registry with hub endpoint/pubkey
+- [ ] Hub UFW: `ufw route allow in on wg0 out on wg0` (new hubs via `gateway-init`; legacy: `kallon-gateway-ensure-forwarding.sh` on hub)
 
 **Tower (Jetson):**
 
@@ -700,7 +704,7 @@ python -m registry.cli register-tower --slug lab --serial 2
 - [ ] `kln_lab_000001` tower `active`, `vpn_ip` allocated — **no manual add-peer**
 - [ ] `kallon-acceptance.sh` → `ACCEPTANCE PASSED`
 - [ ] `wg show wg0` handshake &lt; 180 s on Jetson and hub
-- [ ] `ffprobe rtsp://10.50.0.2:8554/cam1` works from VPN peer
+- [ ] `ffprobe rtsp://10.50.0.2:8554/cam1` works from **NOC VPN peer** (`Test-NetConnection` port 8554 succeeds)
 - [ ] Watchdog alert → hub HTTP 200
 - [ ] No hand-edited `wg0.conf`
 
@@ -714,7 +718,7 @@ python -m registry.cli register-tower --slug lab --serial 2
 | **End-to-end** flow (Paths A / P / Jetson) | **This doc** |
 | See what's **already running** on bench | `legacy/bench-snapshot-2025-05.md` (May 2025 — re-probe for current) |
 | Understand **architecture / phases** | `planning/mass-deployment-roadmap.md` |
-| Provision a **new customer hub** | `docs/postgres-windows-server-setup.md` §8 |
+| Provision a **new customer hub** | `docs/postgres-windows-server-setup.md` §8 + **§8.1** (peer forwarding) |
 | Wire the **dashboard** | `docs/alert-webhook.md` |
 | **ONVIF/PTZ CLI** | `docs/dev-onvif-ptz.md` |
 | Track **remaining work** | `planning/work-plan.md` |

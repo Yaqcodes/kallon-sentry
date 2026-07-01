@@ -400,8 +400,16 @@ No AWS, no Terraform, no manual WireGuard editing. Swapping VPS vendor = new `Hu
 | 4 | `net.ipv4.ip_forward = 1` |
 | 5 | UFW: **UDP 51820** open; **TCP 8080** from `vpn_subnet`; **`ufw route allow in on wg0 out on wg0`** (peer forwarding); deny rest |
 | 6 | Install alert receiver as systemd (`kallon-alert-listener.service`) |
-| 7 | Write customer row to registry (gateway pubkey, endpoint, status=active) |
-| 8 | Output **`gateway_manifest.json`** (see below) |
+| 7 | Re-run `kallon-gateway-ensure-forwarding.sh` after `wg0` is up (idempotent) |
+| 8 | Write customer row to registry (gateway pubkey, endpoint, status=active) |
+| 9 | Output **`gateway_manifest.json`** (see below) |
+
+### `kallon-gateway-ensure-forwarding.sh` (hub migration / idempotent)
+
+Runs **on the hub VPS only** (not on towers). Ensures `ip_forward` and
+`ufw route allow in on wg0 out on wg0` so NOC peers can reach tower RTSP (`:8554`).
+Fresh `kallon-gateway-init.sh` includes this; run ensure-forwarding once on hubs
+provisioned before the rule was baked in. See `docs/postgres-windows-server-setup.md` §8.1.
 
 ### `gateway_manifest.json` (Terra internal — never sent to buyer)
 
@@ -531,11 +539,12 @@ Everything verified live on the bench as of May 2026.
 | `infra/hub-provisioner/hetzner.py` | Secondary Option B adapter |
 | `infra/hub-provisioner/manual.py` | Option C — SSH to existing Ubuntu host |
 | `scripts/kallon-hub-provision` | CLI; writes registry + `gateway_manifest.json` |
-| `scripts/kallon-gateway-init.sh` | On hub VM: WG hub, UFW, alert listener systemd |
+| `scripts/kallon-gateway-init.sh` | On hub VM: WG hub, UFW + wg0 peer forwarding, alert listener systemd |
+| `scripts/kallon-gateway-ensure-forwarding.sh` | Hub-only idempotent peer-forwarding (legacy hub migration) |
 | `scripts/kallon-gateway-add-peer.sh` | Idempotent peer add; called by enrollment API |
 | `../docs/postgres-windows-server-setup.md` §8 | Terra-internal hub runbook; Option B + C |
 | `../docs/alert-webhook.md` | Dashboard integration contract (RTSP + HMAC) |
-| Hub UFW hardened | 51820/udp open; 8080/tcp from VPN subnet only |
+| Hub UFW hardened | 51820/udp open; 8080/tcp from VPN subnet; **wg0→wg0 route allow** (NOC RTSP) |
 | Two-tower test on one hub | `cust_acme` with two towers on one API-provisioned VPS |
 
 **Exit:** `kallon-hub-provision cust_lab --provider lightsail` (or manual for lab) → two towers enrolled → HMAC verified → no hand-edited `wg0.conf`.
@@ -668,7 +677,8 @@ Use this as a phase-level checklist. **Living status with hardware gates:** `wor
 - [ ] `infra/hub-provisioner/hetzner.py` (optional secondary)
 - [x] `infra/hub-provisioner/manual.py` (Option C)
 - [x] `infra/hub-provisioner/cli.py` (`kallon-hub-provision`)
-- [x] `scripts/kallon-gateway-init.sh`
+- [x] `scripts/kallon-gateway-init.sh` (WG hub, UFW + peer forwarding, alert listener systemd)
+- [x] `scripts/kallon-gateway-ensure-forwarding.sh` (hub-only legacy migration)
 - [x] `scripts/kallon-gateway-add-peer.sh`
 - [x] Hub runbook *(see `../docs/postgres-windows-server-setup.md` §8)*
 - [x] `../docs/alert-webhook.md`
@@ -700,7 +710,7 @@ Use this as a phase-level checklist. **Living status with hardware gates:** `wor
 - [ ] Zero-egress proof on pilot unit (once)
 - [ ] LTE profile validated in field
 - [ ] Postgres registry on physical server with backups
-- [ ] Hub provisioned via `kallon-hub-provision` (Option B API; Option C tested)
+- [ ] Hub provisioned via `kallon-hub-provision` (Option B API; Option C tested); wg0 peer forwarding verified from NOC (`Test-NetConnection` tower `:8554`)
 - [ ] Golden image + first-boot enrollment
 - [ ] Manufacturing runbook + acceptance on bench
 

@@ -1,8 +1,12 @@
 #!/usr/bin/env bash
 # kallon-gateway-init.sh — initialize a customer hub VM (any provider).
 #
-# Runs ON the hub host (Ubuntu). Idempotent. Sets up the WireGuard hub, UFW,
-# and the HMAC alert listener, then emits gateway_manifest.json on stdout.
+# Runs ON the hub host (Ubuntu). Idempotent. Sets up the WireGuard hub, UFW
+# (incl. wg0 peer forwarding for NOC → tower RTSP), and the HMAC alert listener,
+# then emits gateway_manifest.json on stdout.
+#
+# Peer forwarding is re-applied after wg0 is up via kallon-gateway-ensure-forwarding.sh.
+# That ensure script also migrates hubs provisioned before the forwarding rule existed.
 #
 # Usage (run as root on the hub):
 #   sudo kallon-gateway-init.sh \

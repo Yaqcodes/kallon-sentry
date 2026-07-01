@@ -441,6 +441,11 @@ python -m registry.cli list-customers
 # expected: cust_lab  status=active  gateway_endpoint=18.220.75.237:51820
 ```
 
+**Hub peer forwarding:** new hubs get `ufw route allow in on wg0 out on wg0` from
+`kallon-gateway-init.sh` automatically. If this hub was provisioned earlier, run once
+on the **hub VPS** (not the Jetson): `sudo bash scripts/kallon-gateway-ensure-forwarding.sh`.
+See `docs/postgres-windows-server-setup.md` §8.1.
+
 ### 5.4 Enrollment API as a persistent service
 
 Create `C:\kallon\config\enrollment-api.env`:
@@ -892,6 +897,7 @@ sudo smartctl -a /dev/nvme0
 - [ ] Postgres 16 running; `init-schema` done; public port closed
 - [ ] `terra-hub-ops.pem` installed; SSH verify passes
 - [ ] `cust_lab` active in registry with hub endpoint + pubkey
+- [ ] Hub UFW peer forwarding: `ufw route allow in on wg0 out on wg0` (via `gateway-init` or `kallon-gateway-ensure-forwarding.sh` on **hub**)
 - [ ] Enrollment API running as service; `healthz` OK from internet
 - [ ] Daily `pg_dump` scheduled
 
@@ -911,7 +917,7 @@ sudo smartctl -a /dev/nvme0
 - [ ] Recording files growing in `/var/kallon/recordings/cam1/`
 
 ### Phase 4 sign-off
-- [ ] RTSP streams over VPN
+- [ ] RTSP streams over VPN **from NOC peer** (`Test-NetConnection` tower `:8554` succeeds)
 - [ ] HMAC alerts return HTTP 200 on hub
 - [ ] iptables: RTSP blocked on WAN IP; SSH survives
 - [ ] 24 h zero-egress pcap saved; zero camera → third-party traffic

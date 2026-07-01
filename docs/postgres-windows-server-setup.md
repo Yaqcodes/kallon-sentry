@@ -553,6 +553,39 @@ Subnets auto-assign: `10.50.0.0/24`, `10.51.0.0/24`, … (`registry/subnet.py`).
 
 Do **not** rely on the registry default without `DATABASE_URL` set.
 
+### 8.1 Hub VPN peer forwarding (required for NOC / dashboard RTSP)
+
+Towers and operator laptops are **separate WireGuard peers** on the hub. Live video
+uses `rtsp://<tower-vpn-ip>:8554/cam<n>` from a NOC peer (see `docs/alert-webhook.md`).
+That traffic is **routed through the hub** (`net.ipv4.ip_forward`). UFW must allow
+**FORWARD** on `wg0 → wg0`:
+
+```bash
+ufw route allow in on wg0 out on wg0
+```
+
+| When | What runs | Where |
+|------|-----------|--------|
+| **New hub** (golden path) | `kallon-gateway-init.sh` via `kallon-hub-provision` / fulfill-order | Hub VPS — automatic |
+| **Existing hub** (provisioned before this rule) | `kallon-gateway-ensure-forwarding.sh` once | Hub VPS only — **not** on Jetson |
+
+**Migrate an existing hub** (idempotent):
+
+```powershell
+scp scripts/kallon-gateway-ensure-forwarding.sh ubuntu@<HUB-PUBLIC-IP>:/tmp/
+ssh ubuntu@<HUB-PUBLIC-IP> "sudo bash /tmp/kallon-gateway-ensure-forwarding.sh"
+```
+
+**Verify from a NOC WireGuard peer** (Windows or Linux):
+
+```powershell
+Test-NetConnection <tower-vpn-ip> -Port 8554   # TcpTestSucceeded : True
+ffprobe -rtsp_transport tcp rtsp://<tower-vpn-ip>:8554/cam1
+```
+
+Ping to the tower VPN IP can succeed while TCP `:8554` fails if this rule is missing.
+Hub-local `ffprobe` (from `10.50.0.1`) is **not** sufficient — test from the NOC peer.
+
 ---
 
 ## 9. Backups

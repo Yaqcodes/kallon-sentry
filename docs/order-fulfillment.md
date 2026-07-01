@@ -211,7 +211,7 @@ python infra/fulfillment/cli.py acme --display-name "Acme Security" `
 |----------|----------------|------|-------|
 | 2.4 | **`fulfill-order` CLI** | Create `cust_acme` if missing; auto-assign VPN subnet (e.g. `10.51.0.0/24`) | Postgres on Artemis |
 | 2.5 | **`hub-provisioner`** | Create Lightsail VM (or use `--provider manual --host` for existing VPS) | AWS `us-east-2` |
-| 2.6 | **`hub-provisioner`** | SSH → run `kallon-gateway-init.sh` (WireGuard hub, UFW, alert listener, `alert.key`) | New hub VPS (public IP, wg `10.51.0.1`) |
+| 2.6 | **`hub-provisioner`** | SSH → run `kallon-gateway-init.sh` (WireGuard hub, UFW incl. **wg0 peer forwarding**, alert listener, `alert.key`) | New hub VPS (public IP, wg `10.51.0.1`) |
 | 2.7 | **`hub-provisioner`** | Write hub endpoint + public key to registry; set customer `status=active` | Postgres |
 | 2.8 | **`fulfill-order` CLI** | `register-tower` × 3 → `kln_acme_000001` … `000003` | Postgres |
 | 2.9 | **`fulfill-order` CLI** | Generate per-tower `enrollment_token`, `claim_code` (`clm_…`), hash token in DB | Postgres |
@@ -419,6 +419,24 @@ sequenceDiagram
                               │
 [Terra Dashboard or NOC peer] ──RTSP/TCP──► buyer browser
 ```
+
+### Hub peer forwarding (production requirement)
+
+NOC and dashboard peers reach tower RTSP **through** the hub (`10.51.0.1` routes; it
+does not terminate the stream). `kallon-gateway-init.sh` must set:
+
+```bash
+ufw route allow in on wg0 out on wg0
+```
+
+| Hub age | Action |
+|---------|--------|
+| **New** (via `kallon-hub-provision` / fulfill-order) | Automatic in `kallon-gateway-init.sh` |
+| **Existing** (before this rule) | Once on hub: `sudo bash scripts/kallon-gateway-ensure-forwarding.sh` |
+
+**Sign-off:** from a NOC WireGuard peer, `Test-NetConnection <tower-vpn-ip> -Port 8554`
+must succeed before declaring live video. Hub-local `ffprobe` alone is insufficient.
+See `docs/postgres-windows-server-setup.md` §8.1.
 
 ---
 

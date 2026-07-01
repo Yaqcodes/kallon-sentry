@@ -31,7 +31,13 @@ rtsp://<tower-vpn-ip>:8554/cam<n>
 - Example: `rtsp://10.50.0.2:8554/cam1`, `rtsp://10.50.0.2:8554/cam2`.
 - The dashboard/relay must be a WireGuard peer in the customer subnet (the
   `x.x.x.10` NOC/ops address is reserved for this).
-- Verify with: `ffprobe -rtsp_transport tcp rtsp://10.50.0.2:8554/cam1`.
+- **Hub:** NOC → tower RTSP is routed through the customer hub. The hub must
+  allow UFW **forward** on `wg0 → wg0` (`kallon-gateway-init.sh` on new hubs;
+  `kallon-gateway-ensure-forwarding.sh` on existing hubs). See
+  `docs/postgres-windows-server-setup.md` §8.1.
+- Verify from the **NOC peer** (not hub shell only):
+  `Test-NetConnection <tower-vpn-ip> -Port 8554` then
+  `ffprobe -rtsp_transport tcp rtsp://10.50.0.2:8554/cam1`.
 
 ---
 
