@@ -1,0 +1,29 @@
+# Example systemd unit for the optional on-Jetson local alert sink.
+# Installed by scripts/install/85-tower-dashboard.sh when ENABLE_TOWER_DASHBOARD=1.
+#
+# Binds 127.0.0.1:8080 (NOT the hub's 10.50.0.1:8080). The watchdog mirrors
+# signed alerts here via ALERT_WEBHOOK_URL_LOCAL; this listener verifies the
+# HMAC and forwards to the dashboard gateway ingest endpoint.
+
+[Unit]
+Description=Kallon tower local alert listener (loopback HMAC sink)
+After=network-online.target kallon-tower-dashboard.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=khalifa
+Group=khalifa
+EnvironmentFile=/etc/kallon/device.env
+Environment=ALERT_KEY_PATH=/etc/kallon/alert.key
+Environment=ALERT_BIND=127.0.0.1
+Environment=ALERT_PORT=8080
+Environment=ALERT_FORWARD_URL=http://127.0.0.1:8766/ingest/alerts
+ExecStart=/usr/bin/python3 /opt/kallon/alert_listener.py
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

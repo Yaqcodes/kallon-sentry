@@ -5,6 +5,12 @@
 # CAMERA_PASSWORD / CAMERA_RTSP_PATH from device.env. The camera password lives
 # only in /etc/mediamtx.yml (mode 0640 root:khalifa) and device.env.
 #
+# The rendered config also enables the mediamtx Control API (127.0.0.1:9997)
+# and HLS (127.0.0.1:8888) bound to loopback for the optional on-Jetson tower
+# lab dashboard, and disables the unused RTMP/WebRTC servers. RTSP (:8554) is
+# unchanged and remains the buyer/NOC surface (firewalled to lo + wg0 by
+# module 90). These extra servers are loopback-only, so this is fleet-safe.
+#
 # Idempotent.
 source "$(dirname "$0")/lib.sh"
 
@@ -69,6 +75,18 @@ render_yml() {
     echo "# /etc/mediamtx.yml — rendered by 50-mediamtx.sh (do not hand-edit)."
     echo "rtspAddress: :8554"
     echo "protocols: [tcp]"
+    echo "# Control API + HLS are bound to loopback (127.0.0.1) for the optional"
+    echo "# on-Jetson tower lab dashboard only — never the network. The buyer/NOC"
+    echo "# integration surface stays RTSP over wg0 (see docs/alert-webhook.md)."
+    echo "# RTMP/WebRTC rebroadcasts are disabled: the Kallon stack does not use"
+    echo "# them, and leaving them on would egress camera video on extra ports."
+    echo "api: yes"
+    echo "apiAddress: 127.0.0.1:9997"
+    echo "hls: yes"
+    echo "hlsAddress: 127.0.0.1:8888"
+    echo "hlsVariant: mpegts"
+    echo "rtmp: no"
+    echo "webrtc: no"
     echo "paths:"
     local i=1 ip
     for ip in "${cams[@]}"; do

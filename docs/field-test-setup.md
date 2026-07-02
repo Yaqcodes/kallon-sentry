@@ -408,6 +408,7 @@ sudo scripts/kallon-jetson-install.sh --env /etc/kallon/device.env --list
 | **60-camera-route** | Systemd oneshot pins each camera IP to `CAMERA_IFACE` | `rendered kallon-camera-route.service` | Use `/32` not `/24` on bench to avoid Wi-Fi conflict |
 | **70-app** | Copies app to `/opt/kallon`, `pip install -r requirements.txt` | `app installed to /opt/kallon` | Repo path wrong; set `REPO_DIR=/home/khalifa/kallon` |
 | **80-watchdogs** | Watchdog + PTZ systemd units, generates `alert.key` if missing | `rendered kallon-watchdog.service` | If auto-generated key: copy to hub before testing alerts |
+| **85-tower-dashboard** | **Optional** lab dashboard (loopback SPA, alert sink, kiosk) | `tower dashboard module complete` when `ENABLE_TOWER_DASHBOARD=1`; otherwise `disabled` | Set `ENABLE_TOWER_DASHBOARD=1` only on the in-house lab tower; see `docs/tower-lab-dashboard.md` |
 | **90-firewall** | iptables: TCP 8554 only on `lo` + `wg0` | `firewall rules applied` | SSH still works (rules don't block WAN SSH) |
 | **99-acceptance** | Calls `kallon-acceptance.sh` | See §5.4 below | Fix individual failures first |
 

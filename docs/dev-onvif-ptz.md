@@ -36,18 +36,47 @@ Requires a PTZ profile and camera firmware that supports **ONVIF AbsoluteMove** 
 
 ### PTZ daemon (Jetson / systemd)
 
-**`kallon_ptz_daemon.py`** keeps one ONVIF connection and serves **newline-delimited JSON** over TCP (default `127.0.0.1:8765`) or `--unix /path` on Linux. Set **`CAMERA_PASSWORD`** in the environment for production. See the script docstring for the `method` / `params` schema (`ping`, `status`, `move_absolute`, `move_continuous`, `stop`, `home`).
+**`kallon_ptz_daemon.py`** holds one lazily-opened ONVIF session **per camera**
+and serves **newline-delimited JSON** over TCP (default `127.0.0.1:8765`) or
+`--unix /path` on Linux. Set **`CAMERA_PASSWORD`** in the environment for
+production. See the script docstring for the `method` / `params` schema
+(`ping`, `list_cameras`, `status`, `move_absolute`, `move_continuous`, `stop`,
+`home`).
+
+**Camera selection.** Every camera-facing method accepts an optional **1-based
+`camera`** param that matches the order of `CAMERA_IPS` in `device.env` (so
+`camera` N == mediamtx path `camN`). It **defaults to `1`** when omitted, so
+existing single-camera callers are unchanged. Query the wiring with
+`list_cameras`.
+
+- **Service (production):** cameras are read from `CAMERA_IPS`,
+  `CAMERA_RTSP_USER`, `CAMERA_PASSWORD`, and `CAMERA_ONVIF_PORT` in
+  `device.env` (loaded via the unit's `EnvironmentFile`). No `--host` is
+  passed; single- and multi-camera towers share one code path.
+- **Bench (single camera):** pass `--host <ip>` to override the environment;
+  that camera becomes index `1`.
 
 ```powershell
 cd "C:\Users\kayob\Documents\Khalifa Projects\Kallon Sentry Tower\CODE"
 $env:CAMERA_PASSWORD = "your_password"
-python kallon_ptz_daemon.py --host 192.168.1.108
+python kallon_ptz_daemon.py --host 192.168.1.108      # bench: single camera → index 1
 ```
 
-Example request (then read one line of response), e.g. with `nc` on Linux:  
-`echo '{"id":1,"method":"ping","params":{}}' | nc -q 1 127.0.0.1 8765`
+Example requests (each returns one JSON line), e.g. with `nc` on Linux:
 
-Copy **`deploy/kallon-ptz-daemon.service.example`** to `/etc/systemd/system/` on the Jetson, edit paths and `ExecStart`, then `systemctl enable --now kallon-ptz-daemon`.
+```bash
+echo '{"id":1,"method":"ping","params":{}}' | nc -q 1 127.0.0.1 8765
+echo '{"id":2,"method":"list_cameras","params":{}}' | nc -q 1 127.0.0.1 8765
+# nudge camera 2 (pan right ~0.4s), then stop it:
+echo '{"id":3,"method":"move_continuous","params":{"camera":2,"pan":0.3,"tilt":0,"zoom":0,"seconds":0.4}}' | nc -q 1 127.0.0.1 8765
+echo '{"id":4,"method":"stop","params":{"camera":2}}' | nc -q 1 127.0.0.1 8765
+```
+
+The installer (`scripts/install/80-watchdogs.sh`) renders
+`/etc/systemd/system/kallon-ptz-daemon.service` for you. For a manual bench
+install, copy **`deploy/kallon-ptz-daemon.service.example`** to
+`/etc/systemd/system/`, edit paths and `ExecStart`, then
+`systemctl enable --now kallon-ptz-daemon`.
 
 ### Health & tamper watchdog (Phase 4, Jetson Orin Nano)
 

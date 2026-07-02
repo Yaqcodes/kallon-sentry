@@ -1,0 +1,32 @@
+# Example systemd unit for the optional on-Jetson tower lab dashboard.
+# The installer renders the real unit from scripts/install/85-tower-dashboard.sh
+# when ENABLE_TOWER_DASHBOARD=1 in /etc/kallon/device.env.
+#
+# Loopback only — for a monitor/keyboard plugged directly into the lab tower.
+# NOT the Terra buyer dashboard (see docs/alert-webhook.md).
+
+[Unit]
+Description=Kallon tower lab dashboard gateway (loopback SPA + ingest)
+After=network-online.target mediamtx.service kallon-watchdog.service kallon-ptz-daemon.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=khalifa
+Group=khalifa
+WorkingDirectory=/opt/kallon/tower-dashboard
+EnvironmentFile=/etc/kallon/device.env
+Environment=DASH_BIND=127.0.0.1
+Environment=DASH_PORT=8766
+Environment=WEB_ROOT=/opt/kallon/tower-dashboard/web
+Environment=WATCHDOG_STATUS_URL=http://127.0.0.1:8770
+Environment=PTZ_HOST=127.0.0.1
+Environment=PTZ_PORT=8765
+ExecStart=/usr/bin/python3 /opt/kallon/tower-dashboard/gateway.py
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

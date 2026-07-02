@@ -102,6 +102,28 @@ else
   FAIL "alert key missing: $KEY"
 fi
 
+# 5. Tower lab dashboard (optional) ───────────────────────────────────────────
+if [[ "${ENABLE_TOWER_DASHBOARD:-0}" == "1" ]]; then
+  hdr "Tower lab dashboard (ENABLE_TOWER_DASHBOARD=1)"
+  dash_port="${TOWER_DASHBOARD_PORT:-8766}"
+  status_port="${TOWER_STATUS_API_PORT:-8770}"
+  if curl -fsS --max-time 3 "http://127.0.0.1:${dash_port}/healthz" >/dev/null 2>&1; then
+    PASS "dashboard gateway /healthz (:${dash_port})"
+  else
+    FAIL "dashboard gateway not responding on 127.0.0.1:${dash_port}"
+  fi
+  if curl -fsS --max-time 3 "http://127.0.0.1:${status_port}/healthz" >/dev/null 2>&1; then
+    PASS "watchdog status API /healthz (:${status_port})"
+  else
+    SOFT "watchdog status API not up on :${status_port} (restart kallon-watchdog after enabling dashboard)"
+  fi
+  if curl -fsS --max-time 3 "http://127.0.0.1:8080/healthz" >/dev/null 2>&1; then
+    PASS "tower alert listener /healthz (:8080)"
+  else
+    SOFT "tower alert listener not up on :8080"
+  fi
+fi
+
 # Tally ───────────────────────────────────────────────────────────────────────
 hdr "Result"
 printf 'pass=%d  fail=%d  warn=%d\n' "$pass" "$fail" "$soft"

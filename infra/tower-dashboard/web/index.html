@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Kallon Tower — Lab Console</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true"></span>
+      <div class="brand-text">
+        <strong>Kallon Sentry Tower</strong>
+        <span class="brand-sub">Local lab console</span>
+      </div>
+    </div>
+    <nav class="tabs" role="tablist">
+      <button class="tab" data-view="feed" role="tab">Live feed &amp; PTZ</button>
+      <button class="tab" data-view="monitor" role="tab">Monitor</button>
+    </nav>
+    <div class="meta">
+      <span id="device-id" class="device-id">—</span>
+      <span id="conn" class="conn conn--unknown" title="Gateway connection">
+        <span class="dot"></span><span id="conn-label">connecting</span>
+      </span>
+    </div>
+  </header>
+
+  <!-- ============================ FEED + PTZ ============================ -->
+  <section id="view-feed" class="view">
+    <div class="feed-layout">
+      <div id="camera-grid" class="camera-grid" aria-label="Camera streams"></div>
+
+      <aside class="ptz" aria-label="PTZ control">
+        <h2 class="ptz-title">PTZ control</h2>
+        <p class="ptz-active">Controlling <strong id="ptz-active-label">cam1</strong></p>
+
+        <div id="ptz-cameras" class="ptz-cameras" role="group" aria-label="Select camera"></div>
+
+        <div class="ptz-pad">
+          <button class="ptz-btn ptz-up"    data-pan="0"  data-tilt="1"  title="Tilt up"    aria-label="Tilt up">▲</button>
+          <button class="ptz-btn ptz-left"  data-pan="-1" data-tilt="0"  title="Pan left"   aria-label="Pan left">◀</button>
+          <button class="ptz-btn ptz-stop"  data-stop="1" title="Stop" aria-label="Stop">■</button>
+          <button class="ptz-btn ptz-right" data-pan="1"  data-tilt="0"  title="Pan right"  aria-label="Pan right">▶</button>
+          <button class="ptz-btn ptz-down"  data-pan="0"  data-tilt="-1" title="Tilt down"  aria-label="Tilt down">▼</button>
+        </div>
+
+        <div class="ptz-zoom" role="group" aria-label="Zoom">
+          <button class="ptz-btn" data-zoom="1"  title="Zoom in"  aria-label="Zoom in">Zoom +</button>
+          <button class="ptz-btn" data-zoom="-1" title="Zoom out" aria-label="Zoom out">Zoom −</button>
+        </div>
+
+        <div class="ptz-row">
+          <button class="ptz-btn ptz-home" data-home="1" title="Go to home preset">Home</button>
+        </div>
+
+        <label class="ptz-speed">
+          Speed <output id="ptz-speed-val">0.50</output>
+          <input id="ptz-speed" type="range" min="0.1" max="1" step="0.1" value="0.5" />
+        </label>
+
+        <p class="ptz-hint">Hold a button to move continuously; release to stop. Arrow keys and <kbd>+</kbd>/<kbd>−</kbd> work too; <kbd>Space</kbd> stops.</p>
+        <p id="ptz-feedback" class="ptz-feedback" role="status" aria-live="polite"></p>
+      </aside>
+    </div>
+  </section>
+
+  <!-- ============================== MONITOR ============================= -->
+  <section id="view-monitor" class="view" hidden>
+    <div class="monitor-layout">
+      <div class="tiles" id="sensor-tiles" aria-label="Sensor and health status"></div>
+
+      <aside class="alerts">
+        <div class="alerts-head">
+          <h2>Live alerts</h2>
+          <button id="alerts-clear" class="link-btn" title="Clear the on-screen list">clear</button>
+        </div>
+        <ul id="alert-list" class="alert-list" aria-live="polite"></ul>
+        <p id="alert-empty" class="alert-empty">No alerts received yet.</p>
+      </aside>
+    </div>
+  </section>
+
+  <script src="vendor/hls.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

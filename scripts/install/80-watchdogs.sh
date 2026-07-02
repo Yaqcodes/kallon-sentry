@@ -61,6 +61,12 @@ write_ptz_unit() {
   local first_cam; first_cam="$(printf '%s' "${CAMERA_IPS:-}" | cut -d',' -f1 | tr -d ' ')"
   [[ -n "$first_cam" ]] || { warn "no camera IP; skipping PTZ daemon."; return; }
 
+  local cam_count; cam_count="$(printf '%s' "${CAMERA_IPS}" | tr ',' '\n' | grep -c .)"
+
+  # The daemon reads all cameras from CAMERA_IPS / CAMERA_RTSP_USER /
+  # CAMERA_PASSWORD / CAMERA_ONVIF_PORT in device.env (EnvironmentFile below),
+  # exposing them 1-based as camera 1..N (aligned with mediamtx cam1..camN).
+  # No --host is passed, so single- and multi-camera towers use one code path.
   local tmp; tmp="$(mktemp)"
   cat > "$tmp" <<EOF
 # Rendered by scripts/install/80-watchdogs.sh — do not hand-edit.
@@ -78,7 +84,6 @@ EnvironmentFile=$KALLON_ENV
 Environment=PTZ_LISTEN_HOST=127.0.0.1
 Environment=PTZ_LISTEN_PORT=8765
 ExecStart=/usr/bin/python3 $APP_DIR/kallon_ptz_daemon.py \\
-    --host $first_cam -P 80 -u $CAMERA_RTSP_USER \\
     --listen-host 127.0.0.1 --listen-port 8765
 Restart=on-failure
 RestartSec=3
@@ -90,7 +95,7 @@ WantedBy=multi-user.target
 EOF
   install -m 0644 -o root -g root "$tmp" /etc/systemd/system/kallon-ptz-daemon.service
   rm -f "$tmp"
-  ok "rendered kallon-ptz-daemon.service (camera $first_cam)"
+  ok "rendered kallon-ptz-daemon.service (${cam_count} camera(s) from CAMERA_IPS)"
 }
 
 main() {

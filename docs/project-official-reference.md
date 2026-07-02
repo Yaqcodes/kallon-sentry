@@ -225,6 +225,8 @@ Modules (in sequence):
   - First-boot enrollment service wiring
 - `80-watchdogs.sh`
   - Watchdog/PTZ-related services and keys
+- `85-tower-dashboard.sh`
+  - **Optional** on-Jetson lab dashboard (loopback only; gated by `ENABLE_TOWER_DASHBOARD`)
 - `90-firewall.sh`
   - RTSP exposure restrictions (`lo` + `wg0` only)
 - `99-acceptance.sh`
@@ -397,6 +399,24 @@ This section lists expected long-running services and periodic schedules in a he
 | `kallon-enroll.service` | oneshot service | First-boot enrollment | once (skipped after `.enrolled`) |
 | `kallon-wg-watchdog.timer` | systemd timer | handshake watchdog scheduler | every 30s |
 | `kallon-wg-watchdog.service` | oneshot service | restart WG if stale | fired by timer |
+
+Optional lab-dashboard services (only when `ENABLE_TOWER_DASHBOARD=1`; see `docs/tower-lab-dashboard.md`):
+
+| Service | Type | Purpose | Bind |
+|---|---|---|---|
+| `kallon-tower-dashboard.service` | systemd service | Lab SPA + ingest gateway | `127.0.0.1:8766` |
+| `kallon-tower-alert-listener.service` | systemd service | Local HMAC alert sink → dashboard ingest | `127.0.0.1:8080` |
+
+Watchdog extensions when the lab dashboard is enabled:
+
+- `GET /status` and `GET /healthz` on `127.0.0.1:8770` (status API thread inside `kallon-watchdog`)
+- Optional alert mirror to `ALERT_WEBHOOK_URL_LOCAL` (default `http://127.0.0.1:8080/alerts`)
+
+mediamtx loopback surfaces (rendered by `50-mediamtx.sh` on all towers; loopback-only):
+
+- Control API: `127.0.0.1:9997`
+- HLS: `127.0.0.1:8888` (`/camN/index.m3u8`)
+- RTMP/WebRTC rebroadcasts disabled (`rtmp: no`, `webrtc: no`)
 
 Tower schedule details:
 
