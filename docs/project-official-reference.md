@@ -331,6 +331,12 @@ This section defines the physical build assumptions for deployment and troublesh
 - Jetson Orin platform (Orin Nano on bench, Orin NX target for production scale)
 - ONVIF-compatible IP cameras (Dahua used on bench)
 - Managed PoE switch for production camera VLAN isolation
+
+**Camera encode (provisioning):** for reliable kiosk video, set substream to H.264
+in each camera's web UI when you provision them (Dahua:
+**Setup → Camera → Video → Encode** → substream). mediamtx and WireGuard RTSP
+accept H.265; the on-Jetson Chromium dashboard does not decode H.265 HLS reliably.
+
 - Tamper sensors:
   - MPU-6050 (motion/impact over I2C)
   - Reed switch (door/open tamper)

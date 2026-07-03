@@ -85,6 +85,9 @@ RTSP_URLS=rtsp://127.0.0.1:8554/cam1,rtsp://127.0.0.1:8554/cam2
 
 `kallon-jetson-install.sh` renders mediamtx from `CAMERA_IPS`. VPN fields are filled at enroll.
 
+For reliable kiosk video, set substream to H.264 in each camera's web UI when you
+provision them (factory or site). See `docs/field-test-setup.md` §4.
+
 ---
 
 ## QR / claim code
@@ -244,7 +247,7 @@ Repeated on the **Terra factory bench** for each Jetson. Buyer not involved.
 | 3.1 | **Factory tech** | Flash Jetson OS image (if bare board) | Factory bench |
 | 3.2 | **Factory tech** | Clone `field-test` branch | Jetson `/home/khalifa/kallon` (or factory path) |
 | 3.3 | **Factory tech** | Copy `device_kln_acme_00000N.env` → `/etc/kallon/device.env` | Jetson |
-| 3.4 | **Factory tech** | Edit `device.env`: set `CAMERA_PASSWORD`, WAN/camera iface for production VLAN profile if needed | Jetson |
+| 3.4 | **Factory tech** | Edit `device.env`: set `CAMERA_PASSWORD`, WAN/camera iface for production VLAN profile if needed; on each Dahua camera set **substream to H.264** in the web UI when you provision IP/credentials | Jetson + camera LAN |
 | 3.5 | **Factory tech** | Copy hub `alert.key` from provision manifest / hub → `/etc/kallon/alert.key` | Hub VPS → Jetson (must match hub) |
 | 3.6 | **Jetson installer** | `sudo scripts/kallon-jetson-install.sh --env /etc/kallon/device.env` | Jetson (modules 00–99: network, mediamtx, watchdog, firewall) |
 | 3.7 | **Factory tech** | Enable `kallon-enroll.service` (one-shot first boot) | Jetson systemd |

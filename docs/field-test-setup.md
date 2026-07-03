@@ -335,9 +335,8 @@ CAMERA_RTSP_USER=admin
 CAMERA_PASSWORD=<your camera password>
 CAMERA_RTSP_PATH=/cam/realmonitor?channel=1&subtype=1
 
-# Dahua encode (do during initial IP setup): set substream (subtype=1) to H.264.
-# mediamtx HLS uses fmp4 and accepts H.264 or H.265, but Chromium on the Jetson
-# kiosk reliably decodes H.264 only. Main stream may stay H.265 if desired.
+# Dahua encode (do during initial IP setup): for reliable kiosk video, set substream
+# to H.264 in each camera web UI when you provision them.
 
 # WireGuard — filled by enrollment OR pre-set for manual bench
 VPN_IP=10.50.0.2/32
@@ -367,6 +366,23 @@ RTSP_URLS=rtsp://127.0.0.1:8554/cam1
 
 | Expected after edit | `grep DEVICE_ID /etc/kallon/device.env` shows `kln_lab_000001` |
 | If camera unreachable | `ping 192.168.1.108`; check cable on `enP8p1s0`; run `ip route get 192.168.1.108` → must show `enP8p1s0` |
+
+### Camera provisioning (Dahua)
+
+For reliable kiosk video, set substream to H.264 in each camera's web UI when you
+provision them (during initial IP setup, before mounting).
+
+| Step | Dahua web UI (typical) |
+|------|------------------------|
+| 1 | Open camera at factory IP or new static IP (`http://192.168.x.x`) |
+| 2 | **Setup → Camera → Video → Encode** |
+| 3 | Select **substream** (matches `subtype=1` in `CAMERA_RTSP_PATH`) |
+| 4 | Set **Video Codec** to **H.264** (main stream may stay H.265) |
+| 5 | Save; confirm with `ffprobe` on the substream URL — codec should be `h264` |
+
+mediamtx HLS (`hlsVariant: fmp4`) remuxes H.264 and H.265 without per-camera code,
+but Chromium on the Jetson kiosk decodes **H.264 HLS reliably**. H.265 tiles stay on
+“connecting…” or fail silently until the substream is H.264.
 
 **Sync alert key with hub** (must be identical on tower + hub):
 
@@ -629,6 +645,9 @@ CAMERA_JETSON_IP=192.168.10.2/24
 CAMERA_IPS=192.168.10.108,192.168.10.109
 ```
 
+For reliable kiosk video, set substream to H.264 in each camera's web UI when you
+provision them (see §4 “Camera provisioning (Dahua)”).
+
 | Change | Why |
 |--------|-----|
 | Camera subnet `192.168.10.0/24` | Isolated VLAN on managed PoE switch |
@@ -665,7 +684,8 @@ python3 scripts/kallon-ptz-benchmark.py --count 1000
 | SSH drops after install | Default route moved to camera eth | Never set gateway on `CAMERA_IFACE`; re-run module 30 |
 | `wg-quick@wg0` fails on Jetson | Missing userspace drop-in on Tegra | Module 40 installs `wg-quick-wg0-userspace.conf.example` |
 | mediamtx up, ffprobe fails | Wrong camera password or path | Check `CAMERA_PASSWORD`, `CAMERA_RTSP_PATH`; test `ffprobe rtsp://admin:pass@192.168.1.108:554/...` |
-| Dashboard HLS “reconnecting”, RTSP ok | H.265 substream or legacy `mpegts` HLS | Re-run module 50 (`hlsVariant: fmp4`); set Dahua substream to H.264 in camera web UI |
+| Dashboard HLS “reconnecting”, RTSP ok | Legacy `mpegts` HLS (H.264 only) | Re-run module 50 (`hlsVariant: fmp4`) |
+| Dashboard tiles stuck on “connecting…”, RTSP ok | H.265 substream; Chromium cannot decode HLS HEVC | Set substream to H.264 in each camera web UI when you provision them |
 | Enroll `connection refused` | API not reachable from Jetson | **Path P:** DNS/TLS/firewall on `enroll.*`; `curl` from Jetson. **Path B:** laptop IP :8000 |
 | Enroll `401` | Bad enrollment token | Re-register tower on server; update `ENROLLMENT_TOKEN` |
 | Enroll `409` | Hub not active in registry | `set-hub --status active` with endpoint + pubkey |

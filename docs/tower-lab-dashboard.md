@@ -56,6 +56,14 @@ H.264 and H.265 into HLS without per-camera code. For reliable playback in
 Chromium on the Jetson kiosk, provision Dahua cameras with **H.264 on the
 substream** (`subtype=1`) during initial IP setup — see `docs/field-test-setup.md`.
 
+## Camera provisioning (Dahua)
+
+For reliable kiosk video, set substream to H.264 in each camera's web UI when you
+provision them. Typical path: **Setup → Camera → Video → Encode** → substream →
+**H.264**. Confirm with `ffprobe` on the substream RTSP URL (`codec_name` should
+be `h264`). RTSP rebroadcast and VLC over WireGuard work with H.265; the kiosk
+browser does not.
+
 ## Loopback ports (lab tower only)
 
 | Port | Service | Bind | Purpose |

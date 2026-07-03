@@ -15,6 +15,11 @@ pip install -r requirements.txt
 - **User:** `admin`
 - **Password:** `terra123` (unless you set `CAMERA_PASSWORD` or pass `-p`)
 
+**Camera encode (provisioning):** for reliable kiosk video, set substream to H.264
+in each camera's web UI when you provision them (Dahua:
+**Setup → Camera → Video → Encode** → substream). The tower rebroadcast path
+(`subtype=1` in `CAMERA_RTSP_PATH`) must match the substream you configure.
+
 If ONVIF does not answer on port **80**, try **8899**:
 
 ```powershell

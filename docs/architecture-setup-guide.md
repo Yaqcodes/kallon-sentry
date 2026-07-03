@@ -688,6 +688,10 @@ ssh "${JETSON_USER}@${JETSON_HOST}"
 
 ### Commands on Jetson
 
+Before install, on each Dahua camera: for reliable kiosk video, set substream to
+H.264 in the camera web UI when you provision them (**Setup → Camera → Video →
+Encode** → substream).
+
 ```bash
 sudo install -d -m 0750 -o root -g khalifa /etc/kallon
 sudo cp /tmp/device_kln_lab_000001.env /etc/kallon/device.env

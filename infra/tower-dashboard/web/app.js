@@ -41,21 +41,47 @@ function setConn(ok) {
 
 /* --------------------------------- HLS --------------------------------- */
 function attachHls(video, url) {
-  if (video.canPlayType("application/vnd.apple.mpegurl")) {
-    video.src = url;
-    video.play().catch(() => {});
-    return;
+  const note = video.closest(".cam")?.querySelector(".cam-note");
+
+  function showNote(msg) {
+    if (!note) return;
+    note.style.display = "";
+    note.textContent = msg;
   }
+
+  // Desktop Chromium reports native HLS support but cannot play mediamtx master
+  // playlists reliably — always prefer hls.js when available.
   if (window.Hls && window.Hls.isSupported()) {
-    const hls = new Hls({ liveSyncDurationCount: 3, manifestLoadingRetryDelay: 1500, backBufferLength: 8 });
-    hls.on(Hls.Events.MANIFEST_PARSED, () => video.play().catch(() => {}));
+    if (video._hls) {
+      try { video._hls.destroy(); } catch (_) {}
+      video._hls = null;
+    }
+    const hls = new Hls({
+      liveSyncDurationCount: 3,
+      manifestLoadingRetryDelay: 1500,
+      backBufferLength: 8,
+      lowLatencyMode: true,
+    });
+    hls.on(Hls.Events.MANIFEST_PARSED, () => {
+      video.play().catch(() => showNote("tap to play (browser policy)"));
+      setTimeout(() => {
+        if (note.style.display === "none") return;
+        if (video.readyState < 2 && !video.currentTime) {
+          showNote("set substream to H.264 in camera web UI");
+        }
+      }, 8000);
+    });
     hls.on(Hls.Events.ERROR, (_evt, data) => {
       if (!data || !data.fatal) return;
       if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+        showNote("stream reconnecting…");
         setTimeout(() => { try { hls.startLoad(); } catch (_) {} }, 1500);
       } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
-        try { hls.recoverMediaError(); } catch (_) {}
+        try { hls.recoverMediaError(); } catch (_) {
+          showNote("set substream to H.264 in camera web UI");
+        }
       } else {
+        showNote("stream unavailable");
         try { hls.destroy(); } catch (_) {}
         setTimeout(() => attachHls(video, url), 3000);
       }
@@ -63,7 +89,17 @@ function attachHls(video, url) {
     hls.loadSource(url);
     hls.attachMedia(video);
     video._hls = hls;
+    return;
   }
+
+  // Safari / iOS native HLS fallback.
+  if (video.canPlayType("application/vnd.apple.mpegurl")) {
+    video.src = url;
+    video.play().catch(() => showNote("tap to play"));
+    return;
+  }
+
+  showNote("HLS not supported in this browser");
 }
 
 /* --------------------------- camera grid + config ---------------------- */
@@ -212,9 +248,26 @@ function renderStatus(s) {
   const disk = (s && s.disk) || {};
   if (!avail) tiles.push(tile("Disk (NVMe)", "unknown", `<div class="tile-value">—</div>`));
   else if (!disk.enabled) tiles.push(tile("Disk (NVMe)", "unknown", `<div class="tile-value">Disabled</div>`, `<div class="tile-sub">ENABLE_NVME=0</div>`));
-  else tiles.push(tile("Disk (NVMe)", disk.faulted ? "crit" : "ok",
-    `<div class="tile-value">${disk.faulted ? "Fault" : "Healthy"}</div>`,
-    disk.smart_temp_c ? `<div class="tile-sub">SMART ${disk.smart_temp_c}°C</div>` : ""));
+  else {
+    const level = disk.faulted ? "crit" : "ok";
+    let value = disk.faulted ? "Fault" : "Healthy";
+    if (disk.space_free_gb != null && disk.space_total_gb != null) {
+      value = `${disk.space_free_gb}<span class="unit"> GB free</span>`;
+    }
+    const sub = [];
+    if (disk.space_used_gb != null && disk.space_total_gb != null) {
+      sub.push(`${disk.space_used_gb} / ${disk.space_total_gb} GB used`);
+    }
+    if (disk.percentage_used != null) sub.push(`wear ${disk.percentage_used}%`);
+    if (disk.available_spare != null) sub.push(`spare ${disk.available_spare}%`);
+    if (disk.smart_temp_c != null && disk.smart_temp_c !== "") sub.push(`${disk.smart_temp_c}°C`);
+    tiles.push(tile(
+      "Disk (NVMe)",
+      level,
+      `<div class="tile-value">${value}</div>`,
+      sub.length ? `<div class="tile-sub">${sub.join(" · ")}</div>` : "",
+    ));
+  }
 
   // System / health
   if (avail) {
