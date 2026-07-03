@@ -84,7 +84,7 @@ render_yml() {
     echo "apiAddress: 127.0.0.1:9997"
     echo "hls: yes"
     echo "hlsAddress: 127.0.0.1:8888"
-    echo "hlsVariant: mpegts"
+    echo "hlsVariant: fmp4"
     echo "rtmp: no"
     echo "webrtc: no"
     echo "paths:"

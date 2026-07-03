@@ -335,6 +335,10 @@ CAMERA_RTSP_USER=admin
 CAMERA_PASSWORD=<your camera password>
 CAMERA_RTSP_PATH=/cam/realmonitor?channel=1&subtype=1
 
+# Dahua encode (do during initial IP setup): set substream (subtype=1) to H.264.
+# mediamtx HLS uses fmp4 and accepts H.264 or H.265, but Chromium on the Jetson
+# kiosk reliably decodes H.264 only. Main stream may stay H.265 if desired.
+
 # WireGuard — filled by enrollment OR pre-set for manual bench
 VPN_IP=10.50.0.2/32
 GATEWAY_ENDPOINT=18.220.75.237:51820
@@ -358,6 +362,7 @@ RTSP_URLS=rtsp://127.0.0.1:8554/cam1
 | `WAN_IFACE=wlP1p1s0` | Ethernet has no internet on bench; Wi-Fi carries SSH/WG/enroll |
 | `CAMERA_JETSON_IP=192.168.1.10/32` | Matches live `kallon-camera-route.service` (not /24 — avoids hijacking Wi-Fi LAN) |
 | `CAMERA_IPS=192.168.1.108` | Your Dahua camera |
+| `CAMERA_RTSP_PATH` … `subtype=1` | Substream (lower bitrate); set encode to **H.264** on camera during IP setup for kiosk HLS |
 | `ENROLLMENT_URL` | **Path B:** laptop LAN IP `:8000/v1`. **Path P:** `https://enroll.yourdomain.com/v1` |
 
 | Expected after edit | `grep DEVICE_ID /etc/kallon/device.env` shows `kln_lab_000001` |
@@ -660,6 +665,7 @@ python3 scripts/kallon-ptz-benchmark.py --count 1000
 | SSH drops after install | Default route moved to camera eth | Never set gateway on `CAMERA_IFACE`; re-run module 30 |
 | `wg-quick@wg0` fails on Jetson | Missing userspace drop-in on Tegra | Module 40 installs `wg-quick-wg0-userspace.conf.example` |
 | mediamtx up, ffprobe fails | Wrong camera password or path | Check `CAMERA_PASSWORD`, `CAMERA_RTSP_PATH`; test `ffprobe rtsp://admin:pass@192.168.1.108:554/...` |
+| Dashboard HLS “reconnecting”, RTSP ok | H.265 substream or legacy `mpegts` HLS | Re-run module 50 (`hlsVariant: fmp4`); set Dahua substream to H.264 in camera web UI |
 | Enroll `connection refused` | API not reachable from Jetson | **Path P:** DNS/TLS/firewall on `enroll.*`; `curl` from Jetson. **Path B:** laptop IP :8000 |
 | Enroll `401` | Bad enrollment token | Re-register tower on server; update `ENROLLMENT_TOKEN` |
 | Enroll `409` | Hub not active in registry | `set-hub --status active` with endpoint + pubkey |

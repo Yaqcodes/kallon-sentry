@@ -16,7 +16,7 @@ protocols: [tcp]
 # apiAddress: 127.0.0.1:9997
 # hls: yes
 # hlsAddress: 127.0.0.1:8888
-# hlsVariant: mpegts
+# hlsVariant: fmp4
 # rtmp: no
 # webrtc: no
 paths:

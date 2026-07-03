@@ -51,6 +51,11 @@ flowchart LR
 | Live alerts | Local alert listener | Watchdog mirrors signed alerts → listener → `POST /ingest/alerts` → SSE |
 | PTZ buttons | PTZ daemon | `POST /api/ptz` → TCP JSON to `127.0.0.1:8765` |
 
+**Video codecs:** module `50-mediamtx.sh` sets `hlsVariant: fmp4`, which remuxes
+H.264 and H.265 into HLS without per-camera code. For reliable playback in
+Chromium on the Jetson kiosk, provision Dahua cameras with **H.264 on the
+substream** (`subtype=1`) during initial IP setup — see `docs/field-test-setup.md`.
+
 ## Loopback ports (lab tower only)
 
 | Port | Service | Bind | Purpose |
