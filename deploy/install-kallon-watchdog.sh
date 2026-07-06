@@ -20,7 +20,7 @@
 
 set -euo pipefail
 
-REPO_DIR="${REPO_DIR:-/home/khalifa/kallon}"
+REPO_DIR="${REPO_DIR:-/opt/kallon}"
 RUNTIME_USER="${RUNTIME_USER:-khalifa}"
 CONFIG_DIR="/etc/kallon"
 ENV_FILE="${CONFIG_DIR}/device.env"

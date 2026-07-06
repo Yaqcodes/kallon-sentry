@@ -12,17 +12,28 @@ APP_DIR=/opt/kallon
 KEY_FILE="$KALLON_CONFIG_DIR/alert.key"
 
 ensure_alert_key() {
+  default_var RUNTIME_USER khalifa
   if [[ -f "$KEY_FILE" ]]; then
     log "alert.key present"
     return
   fi
   head -c 32 /dev/urandom | base64 > "$KEY_FILE"
-  chown root:khalifa "$KEY_FILE"
+  chown root:"$RUNTIME_USER" "$KEY_FILE"
   chmod 0640 "$KEY_FILE"
   ok "generated $KEY_FILE (must match the hub verifier)"
 }
 
 write_watchdog_unit() {
+  default_var RUNTIME_USER khalifa
+  # Detect the Jetson board model for the GPIO library. Falls back to a safe
+  # default that works on all Orin-family modules; override via device.env if needed.
+  local model_name
+  model_name="${JETSON_MODEL_NAME:-$(
+    cat /proc/device-tree/model 2>/dev/null \
+      | tr '[:lower:] ' '[:upper:]_' \
+      | tr -dc 'A-Z0-9_' \
+      || echo "JETSON_ORIN_NANO"
+  )}"
   local tmp; tmp="$(mktemp)"
   cat > "$tmp" <<EOF
 # Rendered by scripts/install/80-watchdogs.sh — do not hand-edit.
@@ -33,16 +44,15 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=khalifa
-Group=khalifa
+User=${RUNTIME_USER}
+Group=${RUNTIME_USER}
 SupplementaryGroups=gpio i2c
 WorkingDirectory=$APP_DIR
 EnvironmentFile=$KALLON_ENV
-Environment=JETSON_MODEL_NAME=JETSON_ORIN_NANO
+Environment=JETSON_MODEL_NAME=${model_name}
 ExecStart=/usr/bin/python3 $APP_DIR/kallon_watchdog.py
 Restart=on-failure
 RestartSec=3
-NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
 ProtectHome=read-only
@@ -77,8 +87,8 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=khalifa
-Group=khalifa
+User=${RUNTIME_USER}
+Group=${RUNTIME_USER}
 WorkingDirectory=$APP_DIR
 EnvironmentFile=$KALLON_ENV
 Environment=PTZ_LISTEN_HOST=127.0.0.1

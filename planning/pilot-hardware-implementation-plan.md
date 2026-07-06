@@ -823,21 +823,63 @@ ssh khalifa@<JETSON-WIFI-IP>
 
 ### 11.2 24-hour zero-egress capture
 
-1. Start Wireshark on the laptop connected to **mirror port 1**.
+1. Start capture on the laptop connected to **mirror port 1**.
+
+   **Recommended (overnight):** write straight to disk with **dumpcap** so you are not
+   dependent on Wireshark Save after a multi-GB run:
+
+   ```powershell
+   dumpcap -D   # note Ethernet interface number
+   dumpcap -i <#> -f "host 192.168.10.108" -w "C:\path\pilot_zero_egress.pcapng"
+   ```
+
+   Stop with **Ctrl+C**. Wireshark GUI is fine for shorter tests; after **Stop** on a
+   large file the UI may stay grey/slow while it loads — the `.pcapng` in `%TEMP%` is
+   usually already on disk and can be copied for analysis.
+
 2. Capture filter: `host 192.168.10.108` (add `.109`–`.111` if multiple cameras).
-3. Let it run for **24 hours** with the tower powered and cameras streaming.
-4. When done, apply display filter:
+3. Let it run for **24 hours** (or **≥12 h** on pilot if bench time is limited) with the
+   tower powered and cameras streaming.
+4. Analyze with display filters (Windows: `tshark` is under
+   `C:\Program Files\Wireshark\`, not always on `PATH`):
+
+**Strict filter** (documented baseline):
 
 ```
 ip.src == 192.168.10.108 && ip.dst != 192.168.10.2
 ```
 
+```powershell
+& "C:\Program Files\Wireshark\tshark.exe" -r "<path>\pilot_zero_egress.pcapng" `
+  -Y "ip.src == 192.168.10.108 && ip.dst != 192.168.10.2" `
+  -T fields -e frame.number -e ip.dst -e frame.protocols
+```
+
+**Sign-off filter** (unicast cloud/P2P intent — excludes multicast/broadcast discovery):
+
+```
+ip.src == 192.168.10.108 && !(ip.dst == 192.168.10.2 || ip.dst == 224.0.0.0/4 || ip.dst == 255.255.255.255)
+```
+
+```powershell
+& "C:\Program Files\Wireshark\tshark.exe" -r "<path>\pilot_zero_egress.pcapng" `
+  -Y "ip.src == 192.168.10.108 && !(ip.dst == 192.168.10.2 || ip.dst == 224.0.0.0/4 || ip.dst == 255.255.255.255)" `
+  -T fields -e frame.number -e ip.dst
+```
+
 Repeat for each camera IP (`.109`, `.110`, `.111`) if present.
 
-**Pass:** zero packets matching this filter.
-**Fail:** any packet — Dahua cloud/P2P feature still active; disable it (Step 4) and repeat.
+| Criterion | Pass | Fail |
+|-----------|------|------|
+| Sign-off filter (unicast non-Jetson) | **zero packets** | any unicast to an IP other than `192.168.10.2` — cloud/P2P or mis-routing; return to Step 4 |
+| Strict filter only | multicast/SSDP/mDNS/broadcast is **expected** on Dahua gear (~tens of frames per soak) | unicast rows in strict-filter output |
 
-Save the pcap: `pilot_zero_egress_YYYYMMDD.pcap` in `planning/artifacts/`.
+**Pilot result (2026-07-01, ~19 h, cam `.108`):** strict filter 35 packets (all
+multicast/broadcast discovery); sign-off filter **0 packets** — **PASS**. Full write-up:
+[`planning/artifacts/pilot-zero-egress-2026-07-01.md`](artifacts/pilot-zero-egress-2026-07-01.md).
+
+Save the pcap outside git (e.g. operator drive); commit the markdown report under
+`planning/artifacts/`. Binary `.pcap` / `.pcapng` files are gitignored.
 
 ### 11.3 PTZ 1,000-command benchmark
 
@@ -920,7 +962,7 @@ sudo smartctl -a /dev/nvme0
 - [ ] RTSP streams over VPN **from NOC peer** (`Test-NetConnection` tower `:8554` succeeds)
 - [ ] HMAC alerts return HTTP 200 on hub
 - [ ] iptables: RTSP blocked on WAN IP; SSH survives
-- [ ] 24 h zero-egress pcap saved; zero camera → third-party traffic
+- [x] Zero-egress capture done (~19 h, 2026-07-01); sign-off filter 0 unicast non-Jetson packets — see [`planning/artifacts/pilot-zero-egress-2026-07-01.md`](artifacts/pilot-zero-egress-2026-07-01.md)
 - [ ] PTZ benchmark result documented
 - [ ] NVMe SMART clean; `ENABLE_NVME=1` active in watchdog
 

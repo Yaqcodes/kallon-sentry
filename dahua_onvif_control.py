@@ -6,12 +6,13 @@ Prerequisites:
   pip install -r requirements.txt
   On the camera web UI, enable ONVIF (often under Network → Platform Access).
 
-Usage (defaults: host 192.168.1.108, user admin, password from script or env):
-  python dahua_onvif_control.py
-  python dahua_onvif_control.py -p other_password
-  set CAMERA_PASSWORD=other_password && python dahua_onvif_control.py ptz --pan 0.25
+Usage:
+  python dahua_onvif_control.py --host <camera-ip>
+  python dahua_onvif_control.py --host <camera-ip> -p <password>
+  set CAMERA_PASSWORD=<password> && python dahua_onvif_control.py --host <camera-ip> ptz --pan 0.25
 
-Edit DEFAULT_HOST / DEFAULT_PASSWORD below if your setup changes.
+Host and password must be supplied via --host / -p flags or environment variables
+(CAMERA_HOST, CAMERA_PASSWORD). No defaults are baked in.
 """
 
 from __future__ import annotations
@@ -26,11 +27,12 @@ from typing import Any
 from onvif import ONVIFCamera
 from zeep.transports import Transport
 
-# --- defaults for your network (change here if needed) ---
-DEFAULT_HOST = "192.168.1.108"
+# Host and credentials must come from CLI flags or environment variables.
+# No defaults are shipped so accidental runs against the wrong camera are impossible.
+DEFAULT_HOST = os.environ.get("CAMERA_HOST", "")
 DEFAULT_PORT = 80
 DEFAULT_USER = "admin"
-DEFAULT_PASSWORD = "terra123"
+DEFAULT_PASSWORD = os.environ.get("CAMERA_PASSWORD", "")
 # How long each ONVIF HTTP call may take before failing (helps avoid hangs)
 DEFAULT_REQUEST_TIMEOUT_SEC = 15.0
 

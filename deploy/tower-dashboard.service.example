@@ -12,8 +12,8 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=khalifa
-Group=khalifa
+User=RUNTIME_USER
+Group=RUNTIME_USER
 WorkingDirectory=/opt/kallon/tower-dashboard
 EnvironmentFile=/etc/kallon/device.env
 Environment=DASH_BIND=127.0.0.1

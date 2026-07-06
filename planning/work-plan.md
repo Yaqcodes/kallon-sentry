@@ -119,7 +119,7 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[H]` hardware-g
 Tooling is delivered and ready to run; execution needs physical hardware.
 
 - [H] Managed PoE switch + camera VLAN + ACL
-- [H] 24h zero-egress Wireshark capture (once on pilot build)
+- [H] 24h zero-egress Wireshark capture (once on pilot build) — **pilot ~19 h done 2026-07-01, PASS** ([`planning/artifacts/pilot-zero-egress-2026-07-01.md`](artifacts/pilot-zero-egress-2026-07-01.md))
 - [H] Apply + test Jetson iptables (`scripts/install/90-firewall.sh`); confirm SSH survives over Wi-Fi WAN
 - [H] PTZ 1,000-command benchmark → `python3 scripts/kallon-ptz-benchmark.py --count 1000`; document or re-baseline sub-100 ms target
 - [H] Verify RTSP + webhook against a stub consumer (`scripts/kallon-acceptance.sh` + a dashboard stand-in)

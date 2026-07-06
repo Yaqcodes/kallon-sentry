@@ -791,30 +791,67 @@ class NvmeProbe:
         # Enable once an NVMe SSD is fitted: set ENABLE_NVME=1 in /etc/kallon/device.env.
         if not self.config.enable_nvme:
             return
+
+        disk_patch: dict[str, Any] = {
+            "enabled": True,
+            "faulted": self._faulted,
+            "device": self.config.nvme_device,
+        }
+        record_path = os.environ.get("RECORD_PATH", "/var/kallon/recordings")
+        try:
+            du = shutil.disk_usage(record_path)
+            disk_patch.update(
+                {
+                    "mount": record_path,
+                    "space_total_gb": round(du.total / (1024**3), 1),
+                    "space_used_gb": round(du.used / (1024**3), 1),
+                    "space_free_gb": round(du.free / (1024**3), 1),
+                }
+            )
+        except OSError:
+            pass
+
         smartctl = shutil.which("smartctl")
         if not smartctl:
             LOG.warning("ENABLE_NVME=1 but smartctl is not installed; skipping NVMe check.")
+            if self.status is not None:
+                self.status.merge("disk", disk_patch)
             return
         try:
-            proc = subprocess.run(  # noqa: S603
+            data: dict[str, Any] = {}
+            for cmd in (
                 [smartctl, "-A", "-j", self.config.nvme_device],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                timeout=5.0,
-                check=False,
-            )
-            data = json.loads(proc.stdout.decode("utf-8", errors="replace") or "{}")
+                ["sudo", "-n", smartctl, "-A", "-j", self.config.nvme_device],
+            ):
+                proc = subprocess.run(  # noqa: S603
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    timeout=5.0,
+                    check=False,
+                )
+                if proc.returncode not in (0, 4):  # 4 = SMART status flags
+                    continue
+                parsed = json.loads(proc.stdout.decode("utf-8", errors="replace") or "{}")
+                if parsed.get("nvme_smart_health_information_log") or parsed.get("temperature"):
+                    data = parsed
+                    break
+            if not data:
+                raise ValueError("smartctl returned no NVMe health data")
         except Exception as exc:  # noqa: BLE001
             LOG.warning("smartctl failed: %s", exc)
+            if self.status is not None:
+                self.status.merge("disk", disk_patch)
             return
+        smart_log = data.get("nvme_smart_health_information_log", {}) or {}
         # Heuristic: reallocated sectors or critical_warning != 0.
-        warning = (
-            data.get("nvme_smart_health_information_log", {}).get("critical_warning", 0)
+        warning = smart_log.get("critical_warning", 0)
+        media_errors = smart_log.get("media_errors", 0)
+        temp_c = (
+            data.get("temperature", {}).get("current")
+            or smart_log.get("temperature")
+            or 0
         )
-        media_errors = (
-            data.get("nvme_smart_health_information_log", {}).get("media_errors", 0)
-        )
-        temp_c = data.get("temperature", {}).get("current", 0)
         faulted = bool(warning) or media_errors > 0
         if faulted and not self._faulted:
             self._faulted = True
@@ -827,11 +864,14 @@ class NvmeProbe:
                     "smart_temp_c": temp_c,
                 },
             ))
+        disk_patch["faulted"] = self._faulted
+        disk_patch["smart_temp_c"] = temp_c
+        if smart_log.get("percentage_used") is not None:
+            disk_patch["percentage_used"] = smart_log.get("percentage_used")
+        if smart_log.get("available_spare") is not None:
+            disk_patch["available_spare"] = smart_log.get("available_spare")
         if self.status is not None:
-            self.status.merge(
-                "disk",
-                {"enabled": True, "faulted": self._faulted, "smart_temp_c": temp_c},
-            )
+            self.status.merge("disk", disk_patch)
 
 
 class MotionProbe:

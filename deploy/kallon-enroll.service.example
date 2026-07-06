@@ -20,7 +20,7 @@ Type=oneshot
 RemainAfterExit=yes
 # Invoke via bash — git tracks scripts 644; do not require +x on kallon-enroll.sh.
 # 75-enroll-service.sh renders this with your repo path; override if copied by hand:
-ExecStart=/usr/bin/bash /home/khalifa/kallon/scripts/kallon-enroll.sh --env /etc/kallon/device.env
+ExecStart=/usr/bin/bash /opt/kallon/scripts/kallon-enroll.sh --env /etc/kallon/device.env
 
 [Install]
 WantedBy=multi-user.target

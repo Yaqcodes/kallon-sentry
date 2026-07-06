@@ -3,7 +3,7 @@
 #
 # Renders one `cam<n>` path per entry in CAMERA_IPS, using CAMERA_RTSP_USER /
 # CAMERA_PASSWORD / CAMERA_RTSP_PATH from device.env. The camera password lives
-# only in /etc/mediamtx.yml (mode 0640 root:khalifa) and device.env.
+# only in /etc/mediamtx.yml (mode 0640 root:$RUNTIME_USER) and device.env.
 #
 # The rendered config also enables the mediamtx Control API (127.0.0.1:9997)
 # and HLS (127.0.0.1:8888) bound to loopback for the optional on-Jetson tower
@@ -113,7 +113,7 @@ render_yml() {
     log "mediamtx.yml unchanged"
     rm -f "$tmp"
   else
-    install -m 0640 -o root -g khalifa "$tmp" "$MEDIAMTX_YML"
+    install -m 0640 -o root -g "${RUNTIME_USER:-khalifa}" "$tmp" "$MEDIAMTX_YML"
     rm -f "$tmp"
     local rec_note=""
     [[ "${RECORD_ENABLE}" == "1" ]] && rec_note=" (recording → ${RECORD_PATH}, delete after ${RECORD_MEDIAMTX_DELETE_AFTER})"
