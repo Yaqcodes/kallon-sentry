@@ -50,9 +50,12 @@ body { display: flex; flex-direction: column; min-height: 100vh; }
 
 .brand { display: flex; align-items: center; gap: 12px; min-width: 210px; }
 .brand-mark {
-  width: 30px; height: 30px; border-radius: 8px;
-  background: linear-gradient(135deg, var(--accent), #7c5cff);
-  box-shadow: 0 0 18px rgba(76, 154, 255, 0.5);
+  width: 36px;
+  height: 36px;
+  border-radius: 6px;
+  object-fit: contain;
+  object-position: center;
+  flex-shrink: 0;
 }
 .brand-text { display: flex; flex-direction: column; line-height: 1.2; }
 .brand-text strong { font-size: 15px; letter-spacing: 0.2px; }
