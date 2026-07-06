@@ -116,8 +116,10 @@ or home directory. Create this directory and install the files **before** the fi
   └── wg0.conf            0600 root:root            # rendered, not hand-edited
 ```
 
-`RUNTIME_USER` is the Jetson login that runs Kallon services (installer default:
-`khalifa`; override with `RUNTIME_USER=…` in `device.env` / install scripts).
+`RUNTIME_USER` is the Jetson login that runs Kallon services. The installer
+auto-detects `SUDO_USER` when `RUNTIME_USER` is unset in `device.env`. Legacy
+bench images used `khalifa`; a fresh flash uses whatever account you created
+during setup — **do not assume `khalifa` exists**.
 
 `.gitignore` already blocks `device.env`, `alert.key`, `*.private`, `*.pem`,
 `*.key`, `*token*`, and `wg-keys*`. Only `*.example` templates are committed.
@@ -129,8 +131,8 @@ with your fulfillment output (`device_kln_<slug>_00000N.env`), a file SCP'd to
 `/tmp/`, `deploy/device.env.example` (bench), or a backed-up `device.env`.
 
 ```bash
-# Default runtime user — change if your Jetson login differs
-RUNTIME_USER=khalifa
+# Your Jetson login — NOT necessarily "khalifa" on a fresh image
+RUNTIME_USER="${SUDO_USER:-$(logname 2>/dev/null || id -un)}"
 SOURCE=/tmp/device_kln_acme_000042.env   # or deploy/device.env.example
 
 # 1. Create config directory (required — install fails without this)

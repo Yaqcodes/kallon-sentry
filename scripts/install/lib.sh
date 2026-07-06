@@ -40,7 +40,13 @@ load_env() {
   # shellcheck disable=SC1090
   source "$env_file"
   set +a
-  ok "loaded $env_file"
+  # Who runs Kallon services. Prefer explicit device.env value; else the sudo
+  # caller (typical factory SSH login); legacy bench default is khalifa.
+  if [[ -z "${RUNTIME_USER:-}" ]]; then
+    RUNTIME_USER="${SUDO_USER:-$(logname 2>/dev/null || echo khalifa)}"
+    export RUNTIME_USER
+  fi
+  ok "loaded $env_file (RUNTIME_USER=$RUNTIME_USER)"
 }
 
 # Fail if a required variable is empty/unset.

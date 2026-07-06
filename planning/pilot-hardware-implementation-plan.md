@@ -519,7 +519,7 @@ SSH to the Jetson (use its Wi-Fi IP from Step 1). Canonical procedure:
 `docs/identity-and-secrets.md` §3.2.
 
 ```bash
-RUNTIME_USER=khalifa
+RUNTIME_USER="${SUDO_USER:-$(logname 2>/dev/null || id -un)}"
 sudo install -d -m 0750 -o root -g "$RUNTIME_USER" /etc/kallon
 
 # Copy the fulfillment output from the Windows Server

@@ -694,7 +694,7 @@ H.264 in the camera web UI when you provision them (**Setup → Camera → Video
 Encode** → substream).
 
 ```bash
-RUNTIME_USER=khalifa
+RUNTIME_USER="${SUDO_USER:-$(logname 2>/dev/null || id -un)}"
 sudo install -d -m 0750 -o root -g "$RUNTIME_USER" /etc/kallon
 sudo install -m 0640 -o root -g "$RUNTIME_USER" /tmp/device_kln_lab_000001.env /etc/kallon/device.env
 sudo sed -i 's/\r$//' /etc/kallon/device.env

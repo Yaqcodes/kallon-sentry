@@ -116,7 +116,7 @@ On each Jetson, install config **before** the installer (see
 `docs/identity-and-secrets.md` §3.2):
 
 ```bash
-RUNTIME_USER=khalifa
+RUNTIME_USER="${SUDO_USER:-$(logname 2>/dev/null || id -un)}"
 sudo install -d -m 0750 -o root -g "$RUNTIME_USER" /etc/kallon
 sudo install -m 0640 -o root -g "$RUNTIME_USER" /tmp/device_kln_<id>.env /etc/kallon/device.env
 sudo sed -i 's/\r$//' /etc/kallon/device.env
