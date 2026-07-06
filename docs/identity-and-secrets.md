@@ -126,14 +126,43 @@ during setup — **do not assume `khalifa` exists**.
 
 ### 3.2 Installing `device.env` and `alert.key`
 
-Run on the Jetson **before** `kallon-jetson-install.sh`. Replace `SOURCE.env`
-with your fulfillment output (`device_kln_<slug>_00000N.env`), a file SCP'd to
-`/tmp/`, `deploy/device.env.example` (bench), or a backed-up `device.env`.
+Install both files on the Jetson **before** `kallon-jetson-install.sh`. They are
+independent: `device.env` is **per tower** (from fulfill-order); `alert.key` is
+**per hub** (same bytes on every tower for that customer — fetch from the hub,
+not generated per tower).
+
+#### A. Copy to the Jetson (Windows control plane)
+
+From the operator PC after `kallon-fulfill-order` (or when restoring a backed-up
+tower):
+
+```powershell
+$HUB_HOST = "YOUR_HUB_PUBLIC_IP"              # e.g. from fulfillment manifest
+$JETSON = "YOUR_USER@JETSON_LAN_IP"            # SSH login on the tower
+$PEM = "C:\kallon\secrets\terra-hub-ops.pem"
+$FACTORY = "C:\kallon\factory\cust_<slug>"     # fulfill-order output directory
+
+# Per tower — fulfillment renders device_kln_<slug>_00000N.env
+scp "$FACTORY\device_kln_<slug>_000001.env" "${JETSON}:/tmp/device.env"
+
+# Per hub — one alert.key shared by all towers on that hub (fetch once, reuse)
+ssh -i $PEM "ubuntu@${HUB_HOST}" "sudo cat /etc/kallon/alert.key" `
+  | Set-Content -NoNewline -Encoding ascii "$FACTORY\alert.key"
+scp "$FACTORY\alert.key" "${JETSON}:/tmp/alert.key"
+```
+
+Keep local backups alongside factory output (e.g. `device.env.backup`,
+`alert.key.backup`) when re-flashing a lab tower.
+
+#### B. Install on the Jetson
+
+SSH to the tower. Replace `SOURCE.env` with `/tmp/device.env` (from step A),
+a backed-up `device.env`, or `deploy/device.env.example` (bench).
 
 ```bash
 # Your Jetson login — NOT necessarily "khalifa" on a fresh image
 RUNTIME_USER="${SUDO_USER:-$(logname 2>/dev/null || id -un)}"
-SOURCE=/tmp/device_kln_acme_000042.env   # or deploy/device.env.example
+SOURCE=/tmp/device.env
 
 # 1. Create config directory (required — install fails without this)
 sudo install -d -m 0750 -o root -g "$RUNTIME_USER" /etc/kallon
@@ -141,14 +170,13 @@ sudo install -d -m 0750 -o root -g "$RUNTIME_USER" /etc/kallon
 # 2. Install device.env with correct owner and mode
 sudo install -m 0640 -o root -g "$RUNTIME_USER" "$SOURCE" /etc/kallon/device.env
 
-# 3. Strip Windows CRLF if the file came from a Windows PC or was edited in Notepad.
-#    Without this, sourcing the file fails with: $'\r': command not found
+# 3. Strip Windows CRLF (fixes: $'\r': command not found when sourcing)
 sudo sed -i 's/\r$//' /etc/kallon/device.env
 
-# 4. Edit secrets and iface names (CAMERA_PASSWORD, WAN_IFACE, CAMERA_IPS, …)
+# 4. Edit secrets and iface names if needed (CAMERA_PASSWORD, WAN_IFACE, …)
 sudoedit /etc/kallon/device.env
 
-# 5. Install alert.key — same bytes as the customer hub (not generated per tower)
+# 5. Install alert.key — must match the hub exactly
 sudo install -m 0640 -o root -g "$RUNTIME_USER" /tmp/alert.key /etc/kallon/alert.key
 sudo sed -i 's/\r$//' /etc/kallon/alert.key
 ```

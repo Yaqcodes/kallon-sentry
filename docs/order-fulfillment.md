@@ -112,20 +112,24 @@ Tower VPN IPs inside each `/24` are allocated automatically at enroll (`.2`, `.3
 
 ## Factory steps after fulfill-order
 
-On each Jetson, install config **before** the installer (see
-`docs/identity-and-secrets.md` §3.2):
+**1. Copy files to the Jetson** (Windows — see `docs/identity-and-secrets.md` §3.2 A):
+
+- `device_kln_<id>.env` → Jetson `/tmp/device.env` (one per tower)
+- Hub `alert.key` → Jetson `/tmp/alert.key` (one per hub, same for all towers)
+
+**2. Install on the Jetson** (`docs/identity-and-secrets.md` §3.2 B):
 
 ```bash
 RUNTIME_USER="${SUDO_USER:-$(logname 2>/dev/null || id -un)}"
 sudo install -d -m 0750 -o root -g "$RUNTIME_USER" /etc/kallon
-sudo install -m 0640 -o root -g "$RUNTIME_USER" /tmp/device_kln_<id>.env /etc/kallon/device.env
+sudo install -m 0640 -o root -g "$RUNTIME_USER" /tmp/device.env /etc/kallon/device.env
 sudo sed -i 's/\r$//' /etc/kallon/device.env
 sudo install -m 0640 -o root -g "$RUNTIME_USER" /tmp/alert.key /etc/kallon/alert.key
 sudo sed -i 's/\r$//' /etc/kallon/alert.key
 sudoedit /etc/kallon/device.env   # CAMERA_PASSWORD, iface names, etc.
 ```
 
-Then:
+**3. Then:**
 
 1. `sudo scripts/kallon-jetson-install.sh --env /etc/kallon/device.env`
 2. Enable `kallon-enroll.service`
