@@ -693,13 +693,12 @@ H.264 in the camera web UI when you provision them (**Setup → Camera → Video
 Encode** → substream).
 
 ```bash
-sudo install -d -m 0750 -o root -g khalifa /etc/kallon
-sudo cp /tmp/device_kln_lab_000001.env /etc/kallon/device.env
-sudo cp /tmp/alert.key /etc/kallon/alert.key   # same file as hub — do not generate per tower
-sudo chown root:khalifa /etc/kallon/device.env /etc/kallon/alert.key
-sudo chmod 0640 /etc/kallon/device.env /etc/kallon/alert.key
+RUNTIME_USER=khalifa
+sudo install -d -m 0750 -o root -g "$RUNTIME_USER" /etc/kallon
+sudo install -m 0640 -o root -g "$RUNTIME_USER" /tmp/device_kln_lab_000001.env /etc/kallon/device.env
+sudo install -m 0640 -o root -g "$RUNTIME_USER" /tmp/alert.key /etc/kallon/alert.key
 
-cd /home/khalifa/kallon
+cd /path/to/kallon-repo
 sudo scripts/kallon-jetson-install.sh --env /etc/kallon/device.env
 
 sudo cp deploy/kallon-enroll.service.example /etc/systemd/system/kallon-enroll.service

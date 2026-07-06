@@ -306,8 +306,10 @@ Sensitive files and ownership (tower):
 
 - `/etc/wireguard/jetson.private` (0600 root:root)
 - `/etc/wireguard/wg0.conf` (0600 root:root)
-- `/etc/kallon/device.env` (0640 root:khalifa)
-- `/etc/kallon/alert.key` (0640 root:khalifa)
+- `/etc/kallon/device.env` (0640 root:RUNTIME_USER)
+- `/etc/kallon/alert.key` (0640 root:RUNTIME_USER)
+
+Install procedure: `docs/identity-and-secrets.md` §3.2.
 
 Sensitive files and ownership (hub):
 
@@ -491,16 +493,21 @@ This is the complete implementation path for a fresh environment.
 
 ### Phase C — Factory tower preparation
 
-Per tower:
+Per tower — install config first (`docs/identity-and-secrets.md` §3.2):
 
-1. Copy generated `device_<device_id>.env` to tower.
-2. Copy matching hub `alert.key` to tower (`/etc/kallon/alert.key`).
-3. Run installer:
-   - `sudo scripts/kallon-jetson-install.sh --env /etc/kallon/device.env`
-4. Enable first-boot enrollment service:
-   - `kallon-enroll.service`
-5. Run acceptance:
-   - `sudo scripts/kallon-acceptance.sh --env /etc/kallon/device.env`
+```bash
+RUNTIME_USER=khalifa
+sudo install -d -m 0750 -o root -g "$RUNTIME_USER" /etc/kallon
+sudo install -m 0640 -o root -g "$RUNTIME_USER" /tmp/device_<device_id>.env /etc/kallon/device.env
+sudo install -m 0640 -o root -g "$RUNTIME_USER" /tmp/alert.key /etc/kallon/alert.key
+sudoedit /etc/kallon/device.env
+```
+
+Then:
+
+1. `sudo scripts/kallon-jetson-install.sh --env /etc/kallon/device.env`
+2. Enable `kallon-enroll.service`
+3. `sudo scripts/kallon-acceptance.sh --env /etc/kallon/device.env`
 
 ### Phase D — First boot in field
 
@@ -538,7 +545,9 @@ If all pass, the tower is production-live for v1 use-case (live feed + signed al
 
 ### 10.2 Tower provisioning
 
-- Install factory env and alert key into `/etc/kallon/`
+Install factory env and alert key into `/etc/kallon/` first — see
+`docs/identity-and-secrets.md` §3.2. Then:
+
 - Run installer:
   - `sudo scripts/kallon-jetson-install.sh --env /etc/kallon/device.env`
 - Run enrollment:

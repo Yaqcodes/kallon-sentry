@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # kallon-jetson-install.sh — single entry point to provision a Jetson.
 #
+# Prerequisite: /etc/kallon/device.env must exist before the first run.
+#   See docs/identity-and-secrets.md §3.2 (create /etc/kallon/, install device.env
+#   and alert.key with mode 0640).
+#
 # Runs the ordered, idempotent modules in scripts/install/ (00 → 99). Safe to
 # re-run. Each module reads /etc/kallon/device.env (override with --env).
 #

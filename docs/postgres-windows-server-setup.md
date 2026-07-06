@@ -704,7 +704,7 @@ must share one durable registry.
 **Per order (factory — one command):**
 
 - [ ] `python infra/fulfillment/cli.py <slug> --display-name "…" --towers N --cameras M …`
-- [ ] Copy each `device_*.env` to Jetson; hub `alert.key` to tower
+- [ ] On each Jetson: create `/etc/kallon/`, install `device.env` + `alert.key` (mode `0640`; see `docs/identity-and-secrets.md` §3.2)
 - [ ] `kallon-jetson-install.sh` + `kallon-enroll.service`
 - [ ] Ship → first boot auto-enrolls (no manual peer-add)
 

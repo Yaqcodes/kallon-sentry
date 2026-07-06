@@ -100,7 +100,9 @@ sudo systemctl enable --now kallon-watchdog
 journalctl -u kallon-watchdog -f
 ```
 
-Ensure `/etc/kallon/device.env` and `/etc/kallon/alert.key` match the hub (see `docs/field-test-setup.md` §5).
+Ensure `/etc/kallon/device.env` and `/etc/kallon/alert.key` are installed on the
+tower with correct permissions before running the installer (see
+`docs/identity-and-secrets.md` §3.2; bench walkthrough: `docs/field-test-setup.md` §5).
 
 Bench check without enabling the service yet:
 

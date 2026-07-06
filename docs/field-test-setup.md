@@ -301,13 +301,13 @@ on the laptop first, then the same Jetson steps (with laptop `ENROLLMENT_URL`).
 
 ### 5.1 Jetson `device.env` (bench profile)
 
-SSH to the Jetson and create config from the template.
+SSH to the Jetson and install config from the template. Full procedure:
+`docs/identity-and-secrets.md` §3.2.
 
 ```bash
-sudo install -d -m 0750 -o root -g khalifa /etc/kallon
-sudo cp deploy/device.env.example /etc/kallon/device.env
-sudo chown root:khalifa /etc/kallon/device.env
-sudo chmod 0640 /etc/kallon/device.env
+RUNTIME_USER=khalifa
+sudo install -d -m 0750 -o root -g "$RUNTIME_USER" /etc/kallon
+sudo install -m 0640 -o root -g "$RUNTIME_USER" deploy/device.env.example /etc/kallon/device.env
 sudoedit /etc/kallon/device.env
 ```
 

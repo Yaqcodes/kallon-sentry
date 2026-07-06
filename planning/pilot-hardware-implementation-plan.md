@@ -515,16 +515,18 @@ Then add a daily Task Scheduler job pointing at `postgres-backup.cmd` at 02:00.
 recording config in `/etc/kallon/device.env`. Every subsequent installer module reads
 this file.
 
-SSH to the Jetson (use its Wi-Fi IP from Step 1):
+SSH to the Jetson (use its Wi-Fi IP from Step 1). Canonical procedure:
+`docs/identity-and-secrets.md` §3.2.
 
 ```bash
-sudo install -d -m 0750 -o root -g khalifa /etc/kallon
+RUNTIME_USER=khalifa
+sudo install -d -m 0750 -o root -g "$RUNTIME_USER" /etc/kallon
 
 # Copy the fulfillment output from the Windows Server
 scp C:\kallon\factory\lab\device_kln_lab_000001.env \
   khalifa@<JETSON-WIFI-IP>:/tmp/device.env
 # Then on Jetson:
-sudo install -m 0640 -o root -g khalifa /tmp/device.env /etc/kallon/device.env
+sudo install -m 0640 -o root -g "$RUNTIME_USER" /tmp/device.env /etc/kallon/device.env
 ```
 
 Open and set these production-specific values (merge with the identity/enrollment fields

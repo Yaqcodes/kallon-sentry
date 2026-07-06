@@ -112,11 +112,22 @@ Tower VPN IPs inside each `/24` are allocated automatically at enroll (`.2`, `.3
 
 ## Factory steps after fulfill-order
 
-1. Copy each `device_<id>.env` → Jetson `/etc/kallon/device.env`
-2. Sync hub `alert.key` → tower `/etc/kallon/alert.key`
-3. `sudo scripts/kallon-jetson-install.sh --env /etc/kallon/device.env`
-4. Enable `kallon-enroll.service`
-5. `kallon-acceptance.sh` → ship
+On each Jetson, install config **before** the installer (see
+`docs/identity-and-secrets.md` §3.2):
+
+```bash
+RUNTIME_USER=khalifa
+sudo install -d -m 0750 -o root -g "$RUNTIME_USER" /etc/kallon
+sudo install -m 0640 -o root -g "$RUNTIME_USER" /tmp/device_kln_<id>.env /etc/kallon/device.env
+sudo install -m 0640 -o root -g "$RUNTIME_USER" /tmp/alert.key /etc/kallon/alert.key
+sudoedit /etc/kallon/device.env   # CAMERA_PASSWORD, iface names, etc.
+```
+
+Then:
+
+1. `sudo scripts/kallon-jetson-install.sh --env /etc/kallon/device.env`
+2. Enable `kallon-enroll.service`
+3. `sudo scripts/kallon-acceptance.sh --env /etc/kallon/device.env` → ship
 
 ---
 
@@ -246,9 +257,9 @@ Repeated on the **Terra factory bench** for each Jetson. Buyer not involved.
 |------|-----|------|-------|
 | 3.1 | **Factory tech** | Flash Jetson OS image (if bare board) | Factory bench |
 | 3.2 | **Factory tech** | Clone `field-test` branch | Jetson `/home/khalifa/kallon` (or factory path) |
-| 3.3 | **Factory tech** | Copy `device_kln_acme_00000N.env` → `/etc/kallon/device.env` | Jetson |
+| 3.3 | **Factory tech** | Install `device_kln_acme_00000N.env` → `/etc/kallon/device.env` (create `/etc/kallon/`, mode `0640`; see `docs/identity-and-secrets.md` §3.2) | Jetson |
 | 3.4 | **Factory tech** | Edit `device.env`: set `CAMERA_PASSWORD`, WAN/camera iface for production VLAN profile if needed; on each Dahua camera set **substream to H.264** in the web UI when you provision IP/credentials | Jetson + camera LAN |
-| 3.5 | **Factory tech** | Copy hub `alert.key` from provision manifest / hub → `/etc/kallon/alert.key` | Hub VPS → Jetson (must match hub) |
+| 3.5 | **Factory tech** | Install hub `alert.key` → `/etc/kallon/alert.key` (same bytes as hub; mode `0640`) | Hub VPS → Jetson |
 | 3.6 | **Jetson installer** | `sudo scripts/kallon-jetson-install.sh --env /etc/kallon/device.env` | Jetson (modules 00–99: network, mediamtx, watchdog, firewall) |
 | 3.7 | **Factory tech** | Enable `kallon-enroll.service` (one-shot first boot) | Jetson systemd |
 | 3.8 | **Factory tech** | Run `kallon-acceptance.sh` on bench (camera connected) | Jetson |

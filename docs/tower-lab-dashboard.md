@@ -80,6 +80,9 @@ RTSP `:8554` is unchanged (firewalled to `lo` + `wg0` only).
 
 ## Configuration (`/etc/kallon/device.env`)
 
+`device.env` must be installed at `/etc/kallon/device.env` before the installer
+runs (`docs/identity-and-secrets.md` §3.2). Dashboard-related keys:
+
 ```bash
 ENABLE_TOWER_DASHBOARD=1
 TOWER_DASHBOARD_PORT=8766

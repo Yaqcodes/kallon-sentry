@@ -96,21 +96,71 @@ hubs. Not one PEM per VPS. Postgres binds `localhost` only; the API binds
 
 ---
 
-## 3. File & ownership map (tower)
+## 3. Tower config on the Jetson
+
+All per-tower secrets and network identity live under `/etc/kallon/`. The installer
+and every systemd unit read **`/etc/kallon/device.env`** — not a copy in the repo
+or home directory. Create this directory and install the files **before** the first
+`sudo scripts/kallon-jetson-install.sh` run.
+
+### 3.1 Paths and permissions
 
 ```
 /etc/kallon/
-  ├── device.env          0640 root:khalifa   # config + camera password + token
-  ├── alert.key           0640 root:khalifa   # HMAC shared with hub
-  └── .enrolled           0644 root:root       # marker; presence = enrolled
+  ├── device.env          0640 root:RUNTIME_USER   # config + camera password + token
+  ├── alert.key           0640 root:RUNTIME_USER   # HMAC shared with hub
+  └── .enrolled           0644 root:root            # marker; presence = enrolled
 /etc/wireguard/
-  ├── jetson.private      0600 root:root       # NEVER leaves the device
+  ├── jetson.private      0600 root:root            # NEVER leaves the device
   ├── jetson.public       0644 root:root
-  └── wg0.conf            0600 root:root        # rendered, not hand-edited
+  └── wg0.conf            0600 root:root            # rendered, not hand-edited
 ```
+
+`RUNTIME_USER` is the Jetson login that runs Kallon services (installer default:
+`khalifa`; override with `RUNTIME_USER=…` in `device.env` / install scripts).
 
 `.gitignore` already blocks `device.env`, `alert.key`, `*.private`, `*.pem`,
 `*.key`, `*token*`, and `wg-keys*`. Only `*.example` templates are committed.
+
+### 3.2 Installing `device.env` and `alert.key`
+
+Run on the Jetson **before** `kallon-jetson-install.sh`. Replace `SOURCE.env`
+with your fulfillment output (`device_kln_<slug>_00000N.env`), a file SCP'd to
+`/tmp/`, `deploy/device.env.example` (bench), or a backed-up `device.env`.
+
+```bash
+# Default runtime user — change if your Jetson login differs
+RUNTIME_USER=khalifa
+SOURCE=/tmp/device_kln_acme_000042.env   # or deploy/device.env.example
+
+# 1. Create config directory (required — install fails without this)
+sudo install -d -m 0750 -o root -g "$RUNTIME_USER" /etc/kallon
+
+# 2. Install device.env with correct owner and mode
+sudo install -m 0640 -o root -g "$RUNTIME_USER" "$SOURCE" /etc/kallon/device.env
+
+# 3. Edit secrets and iface names (CAMERA_PASSWORD, WAN_IFACE, CAMERA_IPS, …)
+sudoedit /etc/kallon/device.env
+
+# 4. Install alert.key — same bytes as the customer hub (not generated per tower)
+sudo install -m 0640 -o root -g "$RUNTIME_USER" /tmp/alert.key /etc/kallon/alert.key
+```
+
+**Verify:**
+
+```bash
+ls -la /etc/kallon/
+grep DEVICE_ID /etc/kallon/device.env
+```
+
+**Then run the installer:**
+
+```bash
+sudo scripts/kallon-jetson-install.sh --env /etc/kallon/device.env
+```
+
+If you SCP files from a Windows PC, strip CRLF before install:
+`sudo sed -i 's/\r$//' /etc/kallon/device.env`
 
 ---
 
