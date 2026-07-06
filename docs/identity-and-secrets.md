@@ -139,11 +139,16 @@ sudo install -d -m 0750 -o root -g "$RUNTIME_USER" /etc/kallon
 # 2. Install device.env with correct owner and mode
 sudo install -m 0640 -o root -g "$RUNTIME_USER" "$SOURCE" /etc/kallon/device.env
 
-# 3. Edit secrets and iface names (CAMERA_PASSWORD, WAN_IFACE, CAMERA_IPS, …)
+# 3. Strip Windows CRLF if the file came from a Windows PC or was edited in Notepad.
+#    Without this, sourcing the file fails with: $'\r': command not found
+sudo sed -i 's/\r$//' /etc/kallon/device.env
+
+# 4. Edit secrets and iface names (CAMERA_PASSWORD, WAN_IFACE, CAMERA_IPS, …)
 sudoedit /etc/kallon/device.env
 
-# 4. Install alert.key — same bytes as the customer hub (not generated per tower)
+# 5. Install alert.key — same bytes as the customer hub (not generated per tower)
 sudo install -m 0640 -o root -g "$RUNTIME_USER" /tmp/alert.key /etc/kallon/alert.key
+sudo sed -i 's/\r$//' /etc/kallon/alert.key
 ```
 
 **Verify:**
@@ -158,9 +163,6 @@ grep DEVICE_ID /etc/kallon/device.env
 ```bash
 sudo scripts/kallon-jetson-install.sh --env /etc/kallon/device.env
 ```
-
-If you SCP files from a Windows PC, strip CRLF before install:
-`sudo sed -i 's/\r$//' /etc/kallon/device.env`
 
 ---
 

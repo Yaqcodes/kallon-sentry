@@ -119,7 +119,9 @@ On each Jetson, install config **before** the installer (see
 RUNTIME_USER=khalifa
 sudo install -d -m 0750 -o root -g "$RUNTIME_USER" /etc/kallon
 sudo install -m 0640 -o root -g "$RUNTIME_USER" /tmp/device_kln_<id>.env /etc/kallon/device.env
+sudo sed -i 's/\r$//' /etc/kallon/device.env
 sudo install -m 0640 -o root -g "$RUNTIME_USER" /tmp/alert.key /etc/kallon/alert.key
+sudo sed -i 's/\r$//' /etc/kallon/alert.key
 sudoedit /etc/kallon/device.env   # CAMERA_PASSWORD, iface names, etc.
 ```
 

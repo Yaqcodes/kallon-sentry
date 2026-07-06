@@ -601,9 +601,10 @@ ssh -i $PEM "${HUB_SSH_USER}@${HUB_HOST}" "sudo cat /etc/kallon/alert.key" `
 `cust_lab` gets the **same** `$FACTORY_DIR\alert.key` plus its own `device_*.env`.
 
 `kallon-fulfill-order` writes `device_*.env` with **Unix LF** line endings even on
-Windows (`write_factory_file`). If you still see `$'\\r': command not found` on the
-Jetson, the file was edited in Notepad or `alert.key` was saved with a CRLF redirect
-— run `sudo sed -i 's/\\r$//' /etc/kallon/device.env` on the tower.
+Windows (`write_factory_file`). If you still see `$'\r': command not found` on the
+Jetson when running the installer, the file has Windows CRLF line endings — run
+`sudo sed -i 's/\r$//' /etc/kallon/device.env` (and the same for `alert.key` if
+needed). See `docs/identity-and-secrets.md` §3.2.
 
 | Command | Invokes | Resources touched |
 |---------|---------|-------------------|
@@ -696,7 +697,9 @@ Encode** → substream).
 RUNTIME_USER=khalifa
 sudo install -d -m 0750 -o root -g "$RUNTIME_USER" /etc/kallon
 sudo install -m 0640 -o root -g "$RUNTIME_USER" /tmp/device_kln_lab_000001.env /etc/kallon/device.env
+sudo sed -i 's/\r$//' /etc/kallon/device.env
 sudo install -m 0640 -o root -g "$RUNTIME_USER" /tmp/alert.key /etc/kallon/alert.key
+sudo sed -i 's/\r$//' /etc/kallon/alert.key
 
 cd /path/to/kallon-repo
 sudo scripts/kallon-jetson-install.sh --env /etc/kallon/device.env

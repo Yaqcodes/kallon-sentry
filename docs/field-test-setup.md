@@ -308,6 +308,7 @@ SSH to the Jetson and install config from the template. Full procedure:
 RUNTIME_USER=khalifa
 sudo install -d -m 0750 -o root -g "$RUNTIME_USER" /etc/kallon
 sudo install -m 0640 -o root -g "$RUNTIME_USER" deploy/device.env.example /etc/kallon/device.env
+sudo sed -i 's/\r$//' /etc/kallon/device.env
 sudoedit /etc/kallon/device.env
 ```
 

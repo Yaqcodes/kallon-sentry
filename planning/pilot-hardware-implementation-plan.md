@@ -527,6 +527,7 @@ scp C:\kallon\factory\lab\device_kln_lab_000001.env \
   khalifa@<JETSON-WIFI-IP>:/tmp/device.env
 # Then on Jetson:
 sudo install -m 0640 -o root -g "$RUNTIME_USER" /tmp/device.env /etc/kallon/device.env
+sudo sed -i 's/\r$//' /etc/kallon/device.env
 ```
 
 Open and set these production-specific values (merge with the identity/enrollment fields

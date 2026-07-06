@@ -499,7 +499,9 @@ Per tower — install config first (`docs/identity-and-secrets.md` §3.2):
 RUNTIME_USER=khalifa
 sudo install -d -m 0750 -o root -g "$RUNTIME_USER" /etc/kallon
 sudo install -m 0640 -o root -g "$RUNTIME_USER" /tmp/device_<device_id>.env /etc/kallon/device.env
+sudo sed -i 's/\r$//' /etc/kallon/device.env
 sudo install -m 0640 -o root -g "$RUNTIME_USER" /tmp/alert.key /etc/kallon/alert.key
+sudo sed -i 's/\r$//' /etc/kallon/alert.key
 sudoedit /etc/kallon/device.env
 ```
 
