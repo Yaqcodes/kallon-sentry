@@ -58,7 +58,7 @@ resolve_record_env() {
 render_yml() {
   require_var CAMERA_IPS
   default_var CAMERA_RTSP_USER admin
-  default_var CAMERA_RTSP_PATH '/cam/realmonitor?channel=1&subtype=1'
+  default_var CAMERA_RTSP_PATH '/cam/realmonitor?channel=1&subtype=0'
   default_var CAMERA_PASSWORD 'CAM_PASSWORD'
   default_var RECORD_ENABLE 0
   default_var RECORD_PATH /var/kallon/recordings
@@ -84,7 +84,7 @@ render_yml() {
     echo "apiAddress: 127.0.0.1:9997"
     echo "hls: yes"
     echo "hlsAddress: 127.0.0.1:8888"
-    echo "hlsVariant: fmp4"
+    echo "hlsVariant: lowLatency"
     echo "rtmp: no"
     echo "webrtc: no"
     echo "paths:"

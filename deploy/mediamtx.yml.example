@@ -16,11 +16,11 @@ protocols: [tcp]
 # apiAddress: 127.0.0.1:9997
 # hls: yes
 # hlsAddress: 127.0.0.1:8888
-# hlsVariant: fmp4
+# hlsVariant: lowLatency
 # rtmp: no
 # webrtc: no
 paths:
   cam1:
-    source: rtsp://admin:CAM_PASSWORD@192.168.1.108:554/cam/realmonitor?channel=1&subtype=1
+    source: rtsp://admin:CAM_PASSWORD@192.168.1.108:554/cam/realmonitor?channel=1&subtype=0
     sourceOnDemand: yes
     rtspTransport: tcp

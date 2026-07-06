@@ -64,6 +64,7 @@ DASH_PORT = int(os.environ.get("DASH_PORT", "8766"))
 WEB_ROOT = Path(os.environ.get("WEB_ROOT", str(Path(__file__).resolve().parent / "web")))
 MEDIAMTX_API = os.environ.get("MEDIAMTX_API", "http://127.0.0.1:9997").rstrip("/")
 MEDIAMTX_HLS = os.environ.get("MEDIAMTX_HLS", "http://127.0.0.1:8888").rstrip("/")
+MJPEG_PROXY  = os.environ.get("MJPEG_PROXY",  "http://127.0.0.1:8889").rstrip("/")
 WATCHDOG_STATUS_URL = os.environ.get("WATCHDOG_STATUS_URL", "http://127.0.0.1:8770").rstrip("/")
 PTZ_HOST = os.environ.get("PTZ_HOST", "127.0.0.1")
 PTZ_PORT = int(os.environ.get("PTZ_PORT", "8765"))
@@ -188,6 +189,7 @@ def camera_list() -> list[dict[str, Any]]:
                 "label": f"cam{i}",
                 "ip": ip,
                 "hls_url": f"{MEDIAMTX_HLS}/cam{i}/index.m3u8",
+                "mjpeg_url": f"{MJPEG_PROXY}/cam{i}" if MJPEG_PROXY else None,
             }
         )
     return cameras
@@ -392,8 +394,8 @@ def main() -> None:
     httpd = ThreadingHTTPServer((DASH_BIND, DASH_PORT), Handler)
     httpd.daemon_threads = True
     log.info(
-        "tower dashboard gateway on %s:%d (web_root=%s, mediamtx_api=%s, hls=%s, status=%s, ptz=%s:%d)",
-        DASH_BIND, DASH_PORT, WEB_ROOT, MEDIAMTX_API, MEDIAMTX_HLS,
+        "tower dashboard gateway on %s:%d (web_root=%s, mediamtx_api=%s, hls=%s, mjpeg=%s, status=%s, ptz=%s:%d)",
+        DASH_BIND, DASH_PORT, WEB_ROOT, MEDIAMTX_API, MEDIAMTX_HLS, MJPEG_PROXY,
         WATCHDOG_STATUS_URL, PTZ_HOST, PTZ_PORT,
     )
     try:

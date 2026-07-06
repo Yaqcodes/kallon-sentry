@@ -20,10 +20,12 @@ APP_DIR=/opt/kallon
 DASH_DIR="$APP_DIR/tower-dashboard"
 LISTENER_SRC="$REPO_DIR/infra/hub/alert_listener.py"
 GATEWAY_SRC="$REPO_DIR/infra/tower-dashboard/gateway.py"
+MJPEG_SRC="$REPO_DIR/infra/tower-dashboard/mjpeg_proxy.py"
 WEB_SRC="$REPO_DIR/infra/tower-dashboard/web"
+MJPEG_PORT=8889
 
 disable_dashboard() {
-  for svc in kallon-tower-dashboard kallon-tower-alert-listener; do
+  for svc in kallon-tower-dashboard kallon-tower-alert-listener kallon-tower-mjpeg-proxy; do
     systemctl disable --now "${svc}.service" >/dev/null 2>&1 || true
     rm -f "/etc/systemd/system/${svc}.service"
   done
@@ -51,6 +53,7 @@ sync_dashboard_files() {
 
   ensure_dir "$DASH_DIR" 0755 root "$RUNTIME_USER"
   install_if_changed "$GATEWAY_SRC" "$DASH_DIR/gateway.py" 0644 root "$RUNTIME_USER" || true
+  install_if_changed "$MJPEG_SRC"   "$DASH_DIR/mjpeg_proxy.py" 0644 root "$RUNTIME_USER" || true
   install_if_changed "$LISTENER_SRC" "$APP_DIR/alert_listener.py" 0644 root "$RUNTIME_USER" || true
 
   # Sync the static web tree (SPA + vendored hls.js).
@@ -93,6 +96,36 @@ EOF
   ok "rendered kallon-tower-alert-listener.service (127.0.0.1:8080 → dashboard ingest)"
 }
 
+write_mjpeg_proxy_unit() {
+  local tmp; tmp="$(mktemp)"
+  cat > "$tmp" <<EOF
+# Rendered by scripts/install/85-tower-dashboard.sh — do not hand-edit.
+[Unit]
+Description=Kallon tower MJPEG proxy (loopback, near-real-time kiosk video)
+After=mediamtx.service
+BindsTo=mediamtx.service
+
+[Service]
+Type=simple
+User=khalifa
+Group=khalifa
+EnvironmentFile=$KALLON_ENV
+Environment=MJPEG_BIND=127.0.0.1
+Environment=MJPEG_PORT=${MJPEG_PORT}
+ExecStart=/usr/bin/python3 $DASH_DIR/mjpeg_proxy.py
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=kallon-tower-dashboard.service
+EOF
+  install -m 0644 -o root -g root "$tmp" /etc/systemd/system/kallon-tower-mjpeg-proxy.service
+  rm -f "$tmp"
+  ok "rendered kallon-tower-mjpeg-proxy.service (127.0.0.1:${MJPEG_PORT})"
+}
+
 write_dashboard_unit() {
   local tmp; tmp="$(mktemp)"
   cat > "$tmp" <<EOF
@@ -114,6 +147,7 @@ Environment=WEB_ROOT=$DASH_DIR/web
 Environment=WATCHDOG_STATUS_URL=http://127.0.0.1:${TOWER_STATUS_API_PORT}
 Environment=PTZ_HOST=127.0.0.1
 Environment=PTZ_PORT=8765
+Environment=MJPEG_PROXY=http://127.0.0.1:${MJPEG_PORT}
 ExecStart=/usr/bin/python3 $DASH_DIR/gateway.py
 Restart=on-failure
 RestartSec=3
@@ -134,6 +168,7 @@ install_desktop_launcher() {
   browser="$(find_browser)" || { warn "no Chromium/Chrome found; skipping desktop launcher."; return; }
 
   local apps="/home/$RUNTIME_USER/.local/share/applications"
+  local icon_path="$DASH_DIR/web/app_icon.png"
   ensure_dir "$apps" 0755 "$RUNTIME_USER" "$RUNTIME_USER"
   local desktop="$apps/kallon-tower-dashboard.desktop"
   cat > "$desktop" <<EOF
@@ -142,6 +177,7 @@ Type=Application
 Name=Kallon Tower Lab Dashboard
 Comment=Local loopback console for bench tower
 Exec=${browser} --app=http://127.0.0.1:${TOWER_DASHBOARD_PORT}/
+Icon=${icon_path}
 Terminal=false
 Categories=Network;Monitor;System;
 StartupNotify=true
@@ -164,6 +200,7 @@ install_kiosk_autostart() {
   browser="$(find_browser)" || { warn "no Chromium/Chrome found; skipping kiosk autostart."; return; }
 
   local autostart="/home/$RUNTIME_USER/.config/autostart"
+  local icon_path="$DASH_DIR/web/app_icon.png"
   ensure_dir "$autostart" 0755 "$RUNTIME_USER" "$RUNTIME_USER"
   local desktop="$autostart/kallon-tower-dashboard.desktop"
   cat > "$desktop" <<EOF
@@ -172,6 +209,7 @@ Type=Application
 Name=Kallon Tower Lab Dashboard
 Comment=Local loopback console for bench tower (kiosk autostart)
 Exec=${browser} --kiosk --noerrdialogs --disable-infobars --disable-session-crashed-bubble --app=http://127.0.0.1:${TOWER_DASHBOARD_PORT}/
+Icon=${icon_path}
 X-GNOME-Autostart-enabled=true
 OnlyShowIn=GNOME;Unity;XFCE;
 EOF
@@ -194,12 +232,15 @@ main() {
   fi
 
   sync_dashboard_files
+  write_mjpeg_proxy_unit
   write_dashboard_unit
   write_alert_listener_unit
   install_desktop_launcher
   install_kiosk_autostart
 
   systemctl daemon-reload
+  systemctl enable --now kallon-tower-mjpeg-proxy.service >/dev/null 2>&1 \
+    || warn "kallon-tower-mjpeg-proxy did not start."
   systemctl enable --now kallon-tower-dashboard.service >/dev/null 2>&1 \
     || warn "kallon-tower-dashboard did not start."
   systemctl enable --now kallon-tower-alert-listener.service >/dev/null 2>&1 \

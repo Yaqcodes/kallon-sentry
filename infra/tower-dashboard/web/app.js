@@ -57,9 +57,9 @@ function attachHls(video, url) {
       video._hls = null;
     }
     const hls = new Hls({
-      liveSyncDurationCount: 3,
+      liveSyncDurationCount: 1,
       manifestLoadingRetryDelay: 1500,
-      backBufferLength: 8,
+      backBufferLength: 4,
       lowLatencyMode: true,
     });
     hls.on(Hls.Events.MANIFEST_PARSED, () => {
@@ -102,6 +102,26 @@ function attachHls(video, url) {
   showNote("HLS not supported in this browser");
 }
 
+/* -------------------------------- MJPEG -------------------------------- */
+function attachMjpeg(tile, url) {
+  const note = $(".cam-note", tile);
+
+  function showNote(msg) { note.style.display = ""; note.textContent = msg; }
+
+  const img = document.createElement("img");
+  img.className = "cam-video";
+  img.alt = "";
+  img.src = url;
+
+  img.addEventListener("load", () => { note.style.display = "none"; });
+  img.addEventListener("error", () => {
+    showNote("stream unavailable — retrying…");
+    setTimeout(() => { img.src = url + "?t=" + Date.now(); }, 3000);
+  });
+
+  tile.insertBefore(img, tile.firstChild);
+}
+
 /* --------------------------- camera grid + config ---------------------- */
 function buildCameraGrid() {
   const grid = $("#camera-grid");
@@ -112,16 +132,23 @@ function buildCameraGrid() {
     tile.className = "cam";
     tile.dataset.camera = String(cam.camera);
     tile.innerHTML = `
-      <video muted playsinline autoplay></video>
       <div class="cam-tag"><span class="dot"></span><span class="name">${cam.label}</span></div>
       <div class="cam-note">connecting…</div>`;
-    const video = $("video", tile);
-    const note = $(".cam-note", tile);
-    video.addEventListener("playing", () => (note.style.display = "none"));
-    video.addEventListener("waiting", () => { note.style.display = ""; note.textContent = "buffering…"; });
+
+    if (cam.mjpeg_url) {
+      attachMjpeg(tile, cam.mjpeg_url);
+    } else {
+      const video = document.createElement("video");
+      video.muted = true; video.playsInline = true; video.autoplay = true;
+      tile.insertBefore(video, tile.firstChild);
+      const note = $(".cam-note", tile);
+      video.addEventListener("playing", () => (note.style.display = "none"));
+      video.addEventListener("waiting", () => { note.style.display = ""; note.textContent = "buffering…"; });
+      attachHls(video, cam.hls_url);
+    }
+
     tile.addEventListener("click", () => setActiveCamera(cam.camera));
     grid.appendChild(tile);
-    attachHls(video, cam.hls_url);
   });
   setActiveCamera(state.activeCamera);
 }

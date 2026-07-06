@@ -71,7 +71,8 @@ browser does not.
 | 8766 | `kallon-tower-dashboard` | 127.0.0.1 | SPA + gateway API |
 | 8770 | `kallon-watchdog` status thread | 127.0.0.1 | `GET /status`, `GET /healthz` |
 | 8765 | `kallon-ptz-daemon` | 127.0.0.1 | PTZ JSON/TCP |
-| 8888 | mediamtx HLS | 127.0.0.1 | Browser video |
+| 8888 | mediamtx HLS | 127.0.0.1 | HLS fallback (lowLatency variant) |
+| 8889 | `kallon-tower-mjpeg-proxy` | 127.0.0.1 | MJPEG `/camN` — near-real-time kiosk video |
 | 9997 | mediamtx Control API | 127.0.0.1 | Stream readiness |
 | 8080 | `kallon-tower-alert-listener` | 127.0.0.1 | Local HMAC alert sink |
 
