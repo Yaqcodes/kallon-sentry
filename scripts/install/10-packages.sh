@@ -20,20 +20,31 @@ APT_PACKAGES=(
 main() {
   require_root
   export DEBIAN_FRONTEND=noninteractive
+  step_init
 
-  log "apt-get update"
-  apt-get update -qq
-
-  log "installing: ${APT_PACKAGES[*]}"
-  # iptables-persistent prompts unless preseeded.
+  step "preseeding iptables-persistent (non-interactive debconf)"
   echo "iptables-persistent iptables-persistent/autosave_v4 boolean true"  | debconf-set-selections
   echo "iptables-persistent iptables-persistent/autosave_v6 boolean true"  | debconf-set-selections
-  apt-get install -y -qq "${APT_PACKAGES[@]}" || die "apt install failed"
+  ok "debconf preseeded"
+
+  step "refreshing package index (apt-get update — can take several minutes on first boot)"
+  apt_get update || die "apt-get update failed"
+
+  step "checking ${#APT_PACKAGES[@]} required packages"
+  apt_report_packages "${APT_PACKAGES[@]}"
+  if [[ "$APT_REPORT_MISSING" -eq 0 ]]; then
+    ok "all required packages already installed"
+  else
+    step "installing $APT_REPORT_MISSING package(s) via apt (downloads + unpack — slow on fresh SD images)"
+    apt_get install -y "${APT_PACKAGES[@]}" || die "apt install failed"
+  fi
 
   # jetson-stats (jtop) is optional telemetry; never fail the build on it.
   if ! command -v jtop >/dev/null 2>&1; then
-    log "installing jetson-stats (optional)"
-    pip3 install -q jetson-stats || warn "jetson-stats install failed (optional, skipping)."
+    step "installing jetson-stats / jtop (optional pip package)"
+    pip3_install jetson-stats || warn "jetson-stats install failed (optional, skipping)."
+  else
+    log "jetson-stats already available ($(command -v jtop))"
   fi
 
   ok "packages installed"

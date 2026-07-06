@@ -46,9 +46,14 @@ main() {
   fi
 
   if [[ -f "$APP_DIR/requirements.txt" ]]; then
-    log "installing Python deps for $RUNTIME_USER"
-    sudo -u "$RUNTIME_USER" pip3 install --user -q -r "$APP_DIR/requirements.txt" \
-      || warn "pip install reported errors (continuing)."
+    step "installing Python deps for $RUNTIME_USER (pip — can take a few minutes)"
+    if install_is_quiet; then
+      sudo -u "$RUNTIME_USER" pip3 install --user -q -r "$APP_DIR/requirements.txt" \
+        || warn "pip install reported errors (continuing)."
+    else
+      sudo -u "$RUNTIME_USER" pip3 install --user -r "$APP_DIR/requirements.txt" \
+        || warn "pip install reported errors (continuing)."
+    fi
   fi
 
   ok "app installed to $APP_DIR (changed=$changed)"

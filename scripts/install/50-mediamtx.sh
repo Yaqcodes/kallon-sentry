@@ -33,8 +33,8 @@ install_binary() {
   tar="mediamtx_${MEDIAMTX_VERSION}_linux_${arch}.tar.gz"
   url="https://github.com/bluenviron/mediamtx/releases/download/${MEDIAMTX_VERSION}/${tar}"
   tmp="$(mktemp -d)"
-  log "downloading mediamtx ${MEDIAMTX_VERSION} (${arch})"
-  curl -fSL "$url" -o "$tmp/$tar" || die "mediamtx download failed: $url"
+  log "downloading mediamtx ${MEDIAMTX_VERSION} (${arch}) from GitHub"
+  run_cmd "curl download: $tar" curl -fSL "$url" -o "$tmp/$tar" || die "mediamtx download failed: $url"
   tar -xzf "$tmp/$tar" -C "$tmp" mediamtx
   install -m 0755 -o root -g root "$tmp/mediamtx" "$MEDIAMTX_BIN"
   rm -rf "$tmp"

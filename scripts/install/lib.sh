@@ -13,6 +13,8 @@ set -euo pipefail
 
 KALLON_ENV="${KALLON_ENV:-/etc/kallon/device.env}"
 KALLON_CONFIG_DIR="${KALLON_CONFIG_DIR:-/etc/kallon}"
+# 0 = show steps + apt/pip progress (default). 1 = -qq/-q only. 2 = trace every command.
+KALLON_INSTALL_QUIET="${KALLON_INSTALL_QUIET:-0}"
 
 # ── logging ──────────────────────────────────────────────────────────────────
 _kallon_ts() { date '+%H:%M:%S'; }
@@ -21,6 +23,79 @@ ok()    { printf '\033[0;32m[%s] OK: %s\033[0m\n' "$(_kallon_ts)" "$*"; }
 warn()  { printf '\033[0;33m[%s] WARN: %s\033[0m\n' "$(_kallon_ts)" "$*" >&2; }
 err()   { printf '\033[0;31m[%s] ERROR: %s\033[0m\n' "$(_kallon_ts)" "$*" >&2; }
 die()   { err "$*"; exit 1; }
+
+# ── install progress ─────────────────────────────────────────────────────────
+_STEP_N=0
+
+step_init() { _STEP_N=0; }
+
+# Numbered sub-step within a module (e.g. "step 2/4: apt-get update").
+step() {
+  _STEP_N=$((_STEP_N + 1))
+  log "step $_STEP_N: $*"
+}
+
+install_is_quiet() { [[ "${KALLON_INSTALL_QUIET:-0}" == "1" ]]; }
+install_is_trace() { [[ "${KALLON_INSTALL_QUIET:-0}" == "2" ]]; }
+
+# Run a command with optional trace banner; streams stdout/stderr unless quiet.
+run_cmd() {
+  local desc="$1"; shift
+  if install_is_trace; then
+    log "exec: $*"
+    set -x
+    "$@"
+    { local ec=$?; set +x; return "$ec"; }
+  fi
+  log "$desc"
+  if install_is_quiet; then
+    "$@" >/dev/null
+  else
+    "$@"
+  fi
+}
+
+# apt-get wrapper: quiet uses -qq; default shows index/download/dpkg progress.
+apt_get() {
+  local quiet=()
+  install_is_quiet && quiet=(-qq)
+  if install_is_trace; then
+    log "exec: apt-get ${quiet[*]} $*"
+    set -x
+    apt-get "${quiet[@]}" "$@"
+    { local ec=$?; set +x; return "$ec"; }
+  fi
+  log "apt-get $*"
+  apt-get "${quiet[@]}" "$@"
+}
+
+# Report which apt packages are missing; sets APT_REPORT_MISSING to the count.
+apt_report_packages() {
+  APT_REPORT_MISSING=0
+  local pkg
+  for pkg in "$@"; do
+    if dpkg -s "$pkg" >/dev/null 2>&1; then
+      log "  present: $pkg"
+    else
+      log "  install: $pkg"
+      APT_REPORT_MISSING=$((APT_REPORT_MISSING + 1))
+    fi
+  done
+}
+
+# pip3 wrapper: quiet uses -q; default shows download/install lines.
+pip3_install() {
+  local quiet=()
+  install_is_quiet && quiet=(-q)
+  if install_is_trace; then
+    log "exec: pip3 install ${quiet[*]} $*"
+    set -x
+    pip3 install "${quiet[@]}" "$@"
+    { local ec=$?; set +x; return "$ec"; }
+  fi
+  log "pip3 install $*"
+  pip3 install "${quiet[@]}" "$@"
+}
 
 # ── guards ───────────────────────────────────────────────────────────────────
 require_root() {
