@@ -33,7 +33,6 @@ main() {
   ip link show "$WAN_IFACE"    >/dev/null 2>&1 || warn "WAN_IFACE $WAN_IFACE not present yet."
   ip link show "$CAMERA_IFACE" >/dev/null 2>&1 || warn "CAMERA_IFACE $CAMERA_IFACE not present yet."
 
-  default_var RUNTIME_USER khalifa
   ensure_dir "$KALLON_CONFIG_DIR" 0750 root "$RUNTIME_USER"
   ok "preflight passed for $DEVICE_ID ($CUSTOMER_ID)"
 }

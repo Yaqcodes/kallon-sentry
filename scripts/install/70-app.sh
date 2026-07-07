@@ -23,7 +23,6 @@ APP_FILES=(
 main() {
   require_root
   load_env
-  default_var RUNTIME_USER khalifa
 
   ensure_dir "$APP_DIR" 0755 root "$RUNTIME_USER"
 

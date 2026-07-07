@@ -113,7 +113,7 @@ render_yml() {
     log "mediamtx.yml unchanged"
     rm -f "$tmp"
   else
-    install -m 0640 -o root -g "${RUNTIME_USER:-khalifa}" "$tmp" "$MEDIAMTX_YML"
+    install -m 0640 -o root -g "${RUNTIME_USER}" "$tmp" "$MEDIAMTX_YML"
     rm -f "$tmp"
     local rec_note=""
     [[ "${RECORD_ENABLE}" == "1" ]] && rec_note=" (recording → ${RECORD_PATH}, delete after ${RECORD_MEDIAMTX_DELETE_AFTER})"

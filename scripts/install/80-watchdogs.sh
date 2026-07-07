@@ -12,7 +12,6 @@ APP_DIR=/opt/kallon
 KEY_FILE="$KALLON_CONFIG_DIR/alert.key"
 
 ensure_alert_key() {
-  default_var RUNTIME_USER khalifa
   if [[ -f "$KEY_FILE" ]]; then
     log "alert.key present"
     return
@@ -24,7 +23,6 @@ ensure_alert_key() {
 }
 
 write_watchdog_unit() {
-  default_var RUNTIME_USER khalifa
   # Detect the Jetson board model for the GPIO library. Falls back to a safe
   # default that works on all Orin-family modules; override via device.env if needed.
   local model_name

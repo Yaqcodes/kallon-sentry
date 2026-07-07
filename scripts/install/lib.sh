@@ -116,9 +116,11 @@ load_env() {
   source "$env_file"
   set +a
   # Who runs Kallon services. Prefer explicit device.env value; else the sudo
-  # caller (typical factory SSH login); legacy bench default is khalifa.
+  # caller (typical factory SSH login); else the logged-in terminal user.
+  # Set RUNTIME_USER=<username> in device.env to be explicit on any image.
   if [[ -z "${RUNTIME_USER:-}" ]]; then
-    RUNTIME_USER="${SUDO_USER:-$(logname 2>/dev/null || echo khalifa)}"
+    RUNTIME_USER="${SUDO_USER:-$(logname 2>/dev/null || true)}"
+    [[ -n "$RUNTIME_USER" ]] || die "Cannot auto-detect RUNTIME_USER. Set RUNTIME_USER=<your-login> in $KALLON_ENV"
     export RUNTIME_USER
   fi
   ok "loaded $env_file (RUNTIME_USER=$RUNTIME_USER)"

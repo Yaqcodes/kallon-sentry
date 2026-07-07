@@ -65,8 +65,7 @@ main() {
   require_root
   load_env
 
-  default_var RUNTIME_USER khalifa
-  id -u "$RUNTIME_USER" >/dev/null 2>&1 || die "runtime user $RUNTIME_USER does not exist."
+  id -u "$RUNTIME_USER" >/dev/null 2>&1 || die "runtime user $RUNTIME_USER does not exist. Set RUNTIME_USER in $KALLON_ENV"
 
   # Hardware access groups for GPIO (reed/LDR), I2C (MPU-6050), camera devices.
   local grp

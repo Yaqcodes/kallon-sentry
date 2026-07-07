@@ -14,6 +14,9 @@ Start here for operations and setup. Strategy docs live in **`planning/`** at re
 Understand the whole system (architecture, components, diagnose)
   → project-official-reference.md
 
+Set up a new Jetson tower (factory or bench)
+  → jetson-tower-setup.md              (single-doc tower setup guide ← start here)
+
 Stand up / operate production (Artemis + hub + tower)
   → architecture-setup-guide.md        (primary walkthrough)
   → postgres-windows-server-setup.md   (control plane detail)
@@ -45,6 +48,7 @@ ONVIF / PTZ dev CLI (optional)
 
 | Doc | Role |
 |-----|------|
+| **`jetson-tower-setup.md`** | **Single-doc tower setup guide — start here for new Jetsons** |
 | **`project-official-reference.md`** | Single technical reference — architecture, diagnose |
 | **`architecture-setup-guide.md`** | Layered setup: Artemis → hub → factory → enroll → live |
 | **`postgres-windows-server-setup.md`** | Path P control plane (Postgres, API, TLS, hub §8, **peer forwarding §8.1**) |

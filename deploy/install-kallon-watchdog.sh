@@ -21,7 +21,11 @@
 set -euo pipefail
 
 REPO_DIR="${REPO_DIR:-/opt/kallon}"
-RUNTIME_USER="${RUNTIME_USER:-khalifa}"
+RUNTIME_USER="${RUNTIME_USER:-${SUDO_USER:-$(logname 2>/dev/null || true)}}"
+if [[ -z "$RUNTIME_USER" ]]; then
+  echo "ERROR: Cannot auto-detect runtime user. Pass RUNTIME_USER=<login> before this script." >&2
+  exit 1
+fi
 CONFIG_DIR="/etc/kallon"
 ENV_FILE="${CONFIG_DIR}/device.env"
 KEY_FILE="${CONFIG_DIR}/alert.key"

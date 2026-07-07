@@ -4,6 +4,13 @@
 # Binds 127.0.0.1:8080 (NOT the hub's 10.50.0.1:8080). The watchdog mirrors
 # signed alerts here via ALERT_WEBHOOK_URL_LOCAL; this listener verifies the
 # HMAC and forwards to the dashboard gateway ingest endpoint.
+#
+# Replace RUNTIME_USER with your actual runtime user (set RUNTIME_USER in device.env).
+#
+#   sudo cp deploy/kallon-tower-alert-listener.service.example \
+#            /etc/systemd/system/kallon-tower-alert-listener.service
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now kallon-tower-alert-listener.service
 
 [Unit]
 Description=Kallon tower local alert listener (loopback HMAC sink)
@@ -12,8 +19,8 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=khalifa
-Group=khalifa
+User=RUNTIME_USER
+Group=RUNTIME_USER
 EnvironmentFile=/etc/kallon/device.env
 Environment=ALERT_KEY_PATH=/etc/kallon/alert.key
 Environment=ALERT_BIND=127.0.0.1

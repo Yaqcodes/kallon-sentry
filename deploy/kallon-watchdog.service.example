@@ -2,7 +2,7 @@
 # The installer (scripts/install/80-watchdogs.sh) renders the real unit; this
 # file is a reference for manual installs or inspection only.
 #
-# Replace RUNTIME_USER with your actual runtime user (default: khalifa).
+# Replace RUNTIME_USER with your Jetson login (set RUNTIME_USER in /etc/kallon/device.env).
 #
 #   sudo cp deploy/kallon-watchdog.service.example /etc/systemd/system/kallon-watchdog.service
 #   sudo systemctl daemon-reload

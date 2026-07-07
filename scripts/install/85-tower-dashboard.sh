@@ -29,7 +29,6 @@ disable_dashboard() {
     systemctl disable --now "${svc}.service" >/dev/null 2>&1 || true
     rm -f "/etc/systemd/system/${svc}.service"
   done
-  default_var RUNTIME_USER khalifa
   rm -f "/home/$RUNTIME_USER/.config/autostart/kallon-tower-dashboard.desktop"
   rm -f "/home/$RUNTIME_USER/.local/share/applications/kallon-tower-dashboard.desktop"
   systemctl daemon-reload
@@ -46,7 +45,6 @@ find_browser() {
 }
 
 sync_dashboard_files() {
-  default_var RUNTIME_USER khalifa
   [[ -f "$GATEWAY_SRC" ]] || die "missing $GATEWAY_SRC"
   [[ -d "$WEB_SRC" ]] || die "missing $WEB_SRC"
   [[ -f "$LISTENER_SRC" ]] || die "missing $LISTENER_SRC"
@@ -75,8 +73,8 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=khalifa
-Group=khalifa
+User=${RUNTIME_USER}
+Group=${RUNTIME_USER}
 EnvironmentFile=$KALLON_ENV
 Environment=ALERT_KEY_PATH=${ALERT_KEY_PATH:-/etc/kallon/alert.key}
 Environment=ALERT_BIND=127.0.0.1
@@ -107,8 +105,8 @@ BindsTo=mediamtx.service
 
 [Service]
 Type=simple
-User=khalifa
-Group=khalifa
+User=${RUNTIME_USER}
+Group=${RUNTIME_USER}
 EnvironmentFile=$KALLON_ENV
 Environment=MJPEG_BIND=127.0.0.1
 Environment=MJPEG_PORT=${MJPEG_PORT}
@@ -137,8 +135,8 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=khalifa
-Group=khalifa
+User=${RUNTIME_USER}
+Group=${RUNTIME_USER}
 WorkingDirectory=$DASH_DIR
 EnvironmentFile=$KALLON_ENV
 Environment=DASH_BIND=127.0.0.1
@@ -163,7 +161,6 @@ EOF
 }
 
 install_desktop_launcher() {
-  default_var RUNTIME_USER khalifa
   local browser
   browser="$(find_browser)" || { warn "no Chromium/Chrome found; skipping desktop launcher."; return; }
 
@@ -188,7 +185,6 @@ EOF
 }
 
 install_kiosk_autostart() {
-  default_var RUNTIME_USER khalifa
   default_var TOWER_DASHBOARD_KIOSK 1
   [[ "${TOWER_DASHBOARD_KIOSK}" == "1" ]] || {
     rm -f "/home/$RUNTIME_USER/.config/autostart/kallon-tower-dashboard.desktop"
