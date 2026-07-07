@@ -315,6 +315,9 @@ sudoedit /etc/kallon/device.env
 **Bench-specific values** (direct camera cable, Wi-Fi WAN — matches your live stack):
 
 ```bash
+# Host — set explicitly for a golden image (removes SUDO_USER/logname ambiguity)
+RUNTIME_USER=sentinel              # your Jetson login; installer fails loudly if unset and undetectable
+
 # Identity — from registry register-tower output
 DEVICE_ID=kln_lab_000001
 CUSTOMER_ID=cust_lab

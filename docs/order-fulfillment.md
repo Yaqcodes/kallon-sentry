@@ -129,6 +129,11 @@ sudo sed -i 's/\r$//' /etc/kallon/alert.key
 sudoedit /etc/kallon/device.env   # CAMERA_PASSWORD, iface names, etc.
 ```
 
+> **Golden image tip:** set `RUNTIME_USER=<your-login>` inside `device.env` too.
+> It documents intent and guarantees the same runtime user on every device and
+> invocation method (the installer otherwise falls back to `SUDO_USER`/`logname`
+> and fails loudly if both are empty). See `docs/identity-and-secrets.md` §3.1.
+
 **3. Then:**
 
 1. `sudo scripts/kallon-jetson-install.sh --env /etc/kallon/device.env`

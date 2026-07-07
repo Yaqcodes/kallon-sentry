@@ -116,10 +116,17 @@ or home directory. Create this directory and install the files **before** the fi
   └── wg0.conf            0600 root:root            # rendered, not hand-edited
 ```
 
-`RUNTIME_USER` is the Jetson login that runs Kallon services. The installer
-auto-detects `SUDO_USER` when `RUNTIME_USER` is unset in `device.env`. Legacy
-bench images used `khalifa`; a fresh flash uses whatever account you created
-during setup — **do not assume `khalifa` exists**.
+`RUNTIME_USER` is the Jetson login that runs Kallon services. Legacy bench
+images used `khalifa`; a fresh flash uses whatever account you created during
+setup — **do not assume `khalifa` exists**.
+
+> **Recommendation — set `RUNTIME_USER` explicitly in `device.env`.** For a
+> true golden image, set `RUNTIME_USER=<your-login>` (e.g. `RUNTIME_USER=sentinel`)
+> in `device.env`. It removes all ambiguity and documents intent, guaranteeing
+> the same result on every device and every invocation method. If left unset,
+> the installer falls back to `SUDO_USER`, then `logname`; if **both** are empty
+> (e.g. run from a plain root shell or a first-boot script), the installer now
+> **fails loudly** rather than silently guessing a user.
 
 `.gitignore` already blocks `device.env`, `alert.key`, `*.private`, `*.pem`,
 `*.key`, `*token*`, and `wg-keys*`. Only `*.example` templates are committed.

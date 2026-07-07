@@ -119,6 +119,7 @@ Key fields to verify:
 
 | Field | What to set |
 |-------|-------------|
+| `RUNTIME_USER` | **Your Jetson login** (e.g. `sentinel`). Set this explicitly — see note below |
 | `DEVICE_ID` | `kln_<slug>_<6 digits>` — from `register-tower` output |
 | `CUSTOMER_ID` | `cust_<slug>` |
 | `ENROLLMENT_TOKEN` | `enr_…` — from `register-tower` output |
@@ -127,6 +128,12 @@ Key fields to verify:
 | `CAMERA_IFACE` | Camera ethernet interface name |
 | `CAMERA_IPS` | Camera IP(s), comma-separated |
 | `CAMERA_PASSWORD` | Dahua admin password |
+
+> **Set `RUNTIME_USER` explicitly for a golden image.** Setting
+> `RUNTIME_USER=<your-login>` in `device.env` removes all ambiguity and documents
+> intent, guaranteeing the same result on every device and every invocation
+> method. If left unset, the installer falls back to `SUDO_USER` then `logname`,
+> and **fails loudly** if both are empty (e.g. run from a plain root shell).
 
 **Common interface names on Jetson Orin Nano:**
 

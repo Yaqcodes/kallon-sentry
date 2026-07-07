@@ -711,6 +711,11 @@ sudo systemctl enable kallon-enroll.service
 sudo scripts/kallon-acceptance.sh --env /etc/kallon/device.env
 ```
 
+> **Golden image tip:** set `RUNTIME_USER=<your-login>` inside `device.env` too.
+> It documents intent and guarantees the same runtime user on every device and
+> invocation method (the installer otherwise falls back to `SUDO_USER`/`logname`
+> and fails loudly if both are empty). See `docs/identity-and-secrets.md` §3.1.
+
 | Command | Invokes | Resources touched |
 |---------|---------|-------------------|
 | `kallon-jetson-install.sh` | modules 00–99 | network, mediamtx, wg, systemd |
