@@ -176,32 +176,35 @@ async def enroll(request: Request) -> EnrollResponse:
         if cust.status != "active" or not (cust.gateway_endpoint and cust.gateway_public_key):
             raise HTTPException(status_code=409, detail="customer hub not provisioned yet")
 
-        # Idempotency: re-enroll with the same key returns the existing config.
-        if tower.status in ("enrolled", "active") and tower.wg_public_key == payload.wg_public_key \
-                and tower.vpn_ip:
-            vpn_ip = tower.vpn_ip
-        else:
-            vpn_ip = tower.vpn_ip or reg.allocate_ip(tower.customer_id)
-            try:
-                get_peer_adder().add_peer(
-                    gateway_host=cust.gateway_endpoint.split(":")[0],
-                    pubkey=payload.wg_public_key,
-                    vpn_ip=vpn_ip,
-                    device_id=tower.device_id,
-                )
-            except RuntimeError:
-                # Full traceback + subprocess stderr goes to the log file — this
-                # is the "real error" to check first when a tower can't get a
-                # WireGuard handshake. IP is not yet persisted, so the tower's
-                # own retry loop will safely re-attempt allocation + peer-add.
-                log.exception("peer-add failed for device=%s", tower.device_id)
-                raise HTTPException(
-                    status_code=502,
-                    detail="hub peer-add failed; the tower will retry automatically",
-                )
-            reg.mark_tower_enrolled(tower.device_id, wg_public_key=payload.wg_public_key, vpn_ip=vpn_ip)
-            reg.audit("tower_enrolled", entity_id=tower.device_id, actor="enrollment-api",
-                      payload_json={"vpn_ip": vpn_ip})
+        # NOTE: intentionally NOT skipping add_peer just because the registry
+        # already says enrolled/active with a matching key. The registry
+        # cannot prove the hub is actually in sync (it wasn't, historically,
+        # under KALLON_PEER_BACKEND=noop; it also wouldn't be after a hub
+        # rebuild/config loss). kallon-gateway-add-peer.sh is idempotent
+        # (`wg set` + rewrite), so re-asserting the peer on every enroll call
+        # is cheap and makes the hub self-heal to match the registry with no
+        # operator action, instead of trusting stale state forever.
+        vpn_ip = tower.vpn_ip or reg.allocate_ip(tower.customer_id)
+        try:
+            get_peer_adder().add_peer(
+                gateway_host=cust.gateway_endpoint.split(":")[0],
+                pubkey=payload.wg_public_key,
+                vpn_ip=vpn_ip,
+                device_id=tower.device_id,
+            )
+        except RuntimeError:
+            # Full traceback + subprocess stderr goes to the log file — this
+            # is the "real error" to check first when a tower can't get a
+            # WireGuard handshake. IP is not yet persisted, so the tower's
+            # own retry loop will safely re-attempt allocation + peer-add.
+            log.exception("peer-add failed for device=%s", tower.device_id)
+            raise HTTPException(
+                status_code=502,
+                detail="hub peer-add failed; the tower will retry automatically",
+            )
+        reg.mark_tower_enrolled(tower.device_id, wg_public_key=payload.wg_public_key, vpn_ip=vpn_ip)
+        reg.audit("tower_enrolled", entity_id=tower.device_id, actor="enrollment-api",
+                  payload_json={"vpn_ip": vpn_ip})
 
         confirm_token = "cnf_" + secrets.token_urlsafe(24)
         _CONFIRM_TOKENS[tower.device_id] = _sha256(confirm_token)
