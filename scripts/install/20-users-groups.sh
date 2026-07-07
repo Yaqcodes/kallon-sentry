@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
 # 20-users-groups.sh — runtime user, group membership, sudoers, and login policy.
 #
-# Idempotent: usermod -aG is additive; sudoers/sshd/gdm written only if changed.
+# Idempotent: usermod -aG is additive; sudoers/gdm written only if changed.
 #
 # Security model for this dedicated kiosk device:
-#   - SSH access via key only (PasswordAuthentication disabled)
 #   - Desktop auto-login (no password prompt at GDM)
-#   - Full NOPASSWD sudo so remote admin works without a stored password
-#   - Password locked (! hash) — the SSH key is the sole authentication token
+#   - Full NOPASSWD sudo so remote admin works without a password prompt
+#
+# NOTE: SSH login policy (password vs key) is intentionally left to the OS
+# default. This module does not disable password authentication or lock the
+# runtime user's password.
 source "$(dirname "$0")/lib.sh"
 
 configure_gdm_autologin() {
@@ -35,32 +37,6 @@ PYEOF
   ok "GDM autologin enabled for $user"
 }
 
-configure_ssh_key_only() {
-  local cfg=/etc/ssh/sshd_config
-  # Disable password auth; enable pubkey auth (pubkey is Ubuntu default but be explicit).
-  sed -i \
-    -e 's/^#*\s*PasswordAuthentication\s.*/PasswordAuthentication no/' \
-    -e 's/^#*\s*PubkeyAuthentication\s.*/PubkeyAuthentication yes/' \
-    "$cfg"
-  # Add the directives if not present at all.
-  grep -q '^PasswordAuthentication' "$cfg" || echo 'PasswordAuthentication no' >> "$cfg"
-  grep -q '^PubkeyAuthentication'   "$cfg" || echo 'PubkeyAuthentication yes'  >> "$cfg"
-  systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || true
-  ok "SSH: key-only auth enforced (PasswordAuthentication no)"
-}
-
-lock_password_if_key_present() {
-  local user="$1"
-  local auth_keys="/home/$user/.ssh/authorized_keys"
-  if [[ -s "$auth_keys" ]]; then
-    # Lock the password — SSH key is the sole authentication token.
-    passwd -l "$user" >/dev/null 2>&1 || true
-    ok "password locked for $user (SSH key present)"
-  else
-    warn "no authorized_keys found for $user — skipping password lock (set up SSH key first)."
-  fi
-}
-
 main() {
   require_root
   load_env
@@ -83,8 +59,7 @@ main() {
   done
 
   # Full NOPASSWD sudo — the runtime user manages all system services and this is
-  # a dedicated single-purpose device. The SSH key (not the password) is the
-  # security boundary. Written atomically + validated with visudo -c.
+  # a dedicated single-purpose device. Written atomically + validated with visudo -c.
   local sudoers=/etc/sudoers.d/kallon tmp
   tmp="$(mktemp)"
   cat > "$tmp" <<EOF
@@ -108,12 +83,6 @@ EOF
 
   # Desktop: auto-login so the kiosk starts without a password prompt.
   configure_gdm_autologin "$RUNTIME_USER"
-
-  # SSH: key-only — disable password authentication.
-  configure_ssh_key_only
-
-  # Lock password last (after sudo and SSH key auth are confirmed in place).
-  lock_password_if_key_present "$RUNTIME_USER"
 }
 
 main "$@"
