@@ -1015,15 +1015,19 @@ def main(argv: Optional[list[str]] = None) -> int:
         mpu = None
     status.update("mpu_present", mpu is not None)
 
-    gpio_handlers = GpioHandlers(config, sender, status)
+    # GPIO (door/cover tamper) is best-effort. If Jetson.GPIO can't load or the
+    # board model isn't recognised, disable those alerts but keep the rest of the
+    # daemon (RTSP, temperature, MPU motion, and the status API) running rather
+    # than crash-looping and taking down all monitoring. Set JETSON_MODEL_NAME in
+    # device.env to a Jetson.GPIO-recognised name if init keeps failing.
+    gpio_handlers: Optional[GpioHandlers] = None
     try:
+        gpio_handlers = GpioHandlers(config, sender, status)
         gpio_handlers.setup()
     except Exception:
-        LOG.exception("GPIO setup failed")
-        sender.stop()
-        if status_server is not None:
-            status_server.stop()
-        return 1
+        LOG.exception("GPIO init failed; door/cover tamper alerts disabled (other monitoring continues)")
+        gpio_handlers = None
+    status.update("gpio_present", gpio_handlers is not None)
 
     rtsp_probe = RtspProbe(config, sender, status)
     temp_probe = TemperatureProbe(config, sender, status)
@@ -1043,7 +1047,8 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     if args.dry_run:
         LOG.info("dry-run complete; exiting before poll loop.")
-        gpio_handlers.teardown()
+        if gpio_handlers is not None:
+            gpio_handlers.teardown()
         sender.stop()
         if status_server is not None:
             status_server.stop()
@@ -1068,7 +1073,8 @@ def main(argv: Optional[list[str]] = None) -> int:
                     LOG.exception("probe %s crashed; continuing", probe_name)
             stop_event.wait(config.poll_interval_sec)
     finally:
-        gpio_handlers.teardown()
+        if gpio_handlers is not None:
+            gpio_handlers.teardown()
         sender.stop()
         if status_server is not None:
             status_server.stop()

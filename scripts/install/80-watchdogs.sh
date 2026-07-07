@@ -22,16 +22,39 @@ ensure_alert_key() {
   ok "generated $KEY_FILE (must match the hub verifier)"
 }
 
+# Map the device-tree model string to a name that Jetson.GPIO recognizes.
+# Jetson.GPIO only accepts a fixed set of model names — the raw DT string (e.g.
+# "NVIDIA Jetson Orin Nano Engineering Reference Developer Kit Super") is NOT one
+# of them, so we classify by family instead of passing the string through.
+# An explicit JETSON_MODEL_NAME in device.env always wins.
+detect_jetson_model() {
+  if [[ -n "${JETSON_MODEL_NAME:-}" ]]; then
+    echo "$JETSON_MODEL_NAME"
+    return
+  fi
+  local dt
+  dt="$(tr -d '\0' < /proc/device-tree/model 2>/dev/null | tr '[:upper:]' '[:lower:]')"
+  case "$dt" in
+    *orin*nano*) echo "JETSON_ORIN_NANO" ;;
+    *orin*nx*)   echo "JETSON_ORIN_NX" ;;
+    *orin*)      echo "JETSON_ORIN" ;;
+    *xavier*nx*) echo "JETSON_NX" ;;
+    *xavier*)    echo "JETSON_XAVIER" ;;
+    *tx2*)       echo "JETSON_TX2" ;;
+    *nano*)      echo "JETSON_NANO" ;;
+    *)           echo "" ;;   # unknown — let Jetson.GPIO attempt its own detection
+  esac
+}
+
 write_watchdog_unit() {
-  # Detect the Jetson board model for the GPIO library. Falls back to a safe
-  # default that works on all Orin-family modules; override via device.env if needed.
-  local model_name
-  model_name="${JETSON_MODEL_NAME:-$(
-    cat /proc/device-tree/model 2>/dev/null \
-      | tr '[:lower:] ' '[:upper:]_' \
-      | tr -dc 'A-Z0-9_' \
-      || echo "JETSON_ORIN_NANO"
-  )}"
+  local model_name model_line=""
+  model_name="$(detect_jetson_model)"
+  if [[ -n "$model_name" ]]; then
+    model_line="Environment=JETSON_MODEL_NAME=${model_name}"
+    ok "Jetson.GPIO model resolved to $model_name"
+  else
+    warn "could not classify Jetson model from device-tree; leaving JETSON_MODEL_NAME unset (set it in device.env if GPIO init fails)."
+  fi
   local tmp; tmp="$(mktemp)"
   cat > "$tmp" <<EOF
 # Rendered by scripts/install/80-watchdogs.sh — do not hand-edit.
@@ -47,7 +70,7 @@ Group=${RUNTIME_USER}
 SupplementaryGroups=gpio i2c
 WorkingDirectory=$APP_DIR
 EnvironmentFile=$KALLON_ENV
-Environment=JETSON_MODEL_NAME=${model_name}
+${model_line}
 ExecStart=/usr/bin/python3 $APP_DIR/kallon_watchdog.py
 Restart=on-failure
 RestartSec=3
