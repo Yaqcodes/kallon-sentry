@@ -129,7 +129,7 @@ write_dashboard_unit() {
   cat > "$tmp" <<EOF
 # Rendered by scripts/install/85-tower-dashboard.sh — do not hand-edit.
 [Unit]
-Description=Kallon tower lab dashboard gateway (loopback SPA + ingest)
+Description=Sentinel tower dashboard gateway (loopback SPA + ingest)
 After=network-online.target mediamtx.service kallon-watchdog.service kallon-ptz-daemon.service
 Wants=network-online.target
 
@@ -171,7 +171,7 @@ install_desktop_launcher() {
   cat > "$desktop" <<EOF
 [Desktop Entry]
 Type=Application
-Name=Kallon Tower Lab Dashboard
+Name=Sentinel
 Comment=Local loopback console for bench tower
 Exec=${browser} --app=http://127.0.0.1:${TOWER_DASHBOARD_PORT}/
 Icon=${icon_path}
@@ -202,7 +202,7 @@ install_kiosk_autostart() {
   cat > "$desktop" <<EOF
 [Desktop Entry]
 Type=Application
-Name=Kallon Tower Lab Dashboard
+Name=Sentinel
 Comment=Local loopback console for bench tower (kiosk autostart)
 Exec=${browser} --kiosk --noerrdialogs --disable-infobars --disable-session-crashed-bubble --app=http://127.0.0.1:${TOWER_DASHBOARD_PORT}/
 Icon=${icon_path}

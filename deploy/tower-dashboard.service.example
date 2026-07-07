@@ -6,7 +6,7 @@
 # NOT the Terra buyer dashboard (see docs/alert-webhook.md).
 
 [Unit]
-Description=Kallon tower lab dashboard gateway (loopback SPA + ingest)
+Description=Sentinel tower dashboard gateway (loopback SPA + ingest)
 After=network-online.target mediamtx.service kallon-watchdog.service kallon-ptz-daemon.service
 Wants=network-online.target
 

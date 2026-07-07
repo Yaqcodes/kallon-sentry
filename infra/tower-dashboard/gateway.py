@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Kallon tower lab dashboard — ingest gateway (loopback only).
+"""Sentinel — tower dashboard ingest gateway (loopback only).
 
-A thin, stdlib-only HTTP server for the OPTIONAL on-Jetson lab dashboard. It
+A thin, stdlib-only HTTP server for the OPTIONAL on-Jetson Sentinel dashboard. It
 does not read any hardware and contains no monitoring logic of its own — it
 only *ingests* from the surfaces that already exist on the tower and fans the
 data out to a local browser:

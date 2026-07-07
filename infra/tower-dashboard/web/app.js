@@ -1,4 +1,4 @@
-/* Kallon tower lab console — front-end logic (vanilla, no build step).
+/* Sentinel — tower console front-end logic (vanilla, no build step).
  * Ingest-only: talks solely to the local gateway (/api/*). No hardware access. */
 "use strict";
 

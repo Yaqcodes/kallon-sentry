@@ -4,7 +4,7 @@
 
 [Desktop Entry]
 Type=Application
-Name=Kallon Tower Lab Dashboard
+Name=Sentinel
 Comment=Local loopback console for bench tower
 Exec=chromium-browser --app=http://127.0.0.1:8766/
 Icon=/opt/kallon/tower-dashboard/web/app_icon.png
