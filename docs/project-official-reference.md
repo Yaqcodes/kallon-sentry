@@ -257,12 +257,15 @@ Endpoints:
 
 Peer backend (`infra/enrollment-api/app/peering.py`):
 
-- `KALLON_PEER_BACKEND=subprocess` (production)
-- `KALLON_PEER_BACKEND=noop` (lab/testing only)
+- `KALLON_PEER_BACKEND=subprocess` (production) — **this is also the default if unset**;
+  an unconfigured deploy fails loudly at startup (missing script/SSH key logged at
+  `ERROR`) instead of silently no-opping.
+- `KALLON_PEER_BACKEND=noop` (lab/testing only) — only activates when set explicitly;
+  every use logs at `ERROR` so it can't be mistaken for normal production behavior.
 
 Production requirement:
 
-- `subprocess` backend must be explicitly configured with a valid `KALLON_ADDPEER_CMD` and ops SSH key variables.
+- `subprocess` backend must be explicitly configured with a valid `KALLON_ADDPEER_CMD` and ops SSH key variables. `SubprocessPeerAdder` retries transient SSH failures 3x with backoff before giving up.
 
 ---
 
@@ -405,6 +408,7 @@ This section lists expected long-running services and periodic schedules in a he
 | `kallon-ptz-daemon.service` | systemd service | ONVIF control endpoint (`127.0.0.1:8765`) | continuous |
 | `kallon-camera-route.service` | oneshot service | Camera route pinning to camera NIC | at boot / re-run as needed |
 | `kallon-enroll.service` | oneshot service | First-boot enrollment | once (skipped after `.enrolled`) |
+| `kallon-enroll.timer` | systemd timer | re-fires `kallon-enroll.service` until enrolled | every 3 min (no-op once `.enrolled` exists) |
 | `kallon-wg-watchdog.timer` | systemd timer | handshake watchdog scheduler | every 30s |
 | `kallon-wg-watchdog.service` | oneshot service | restart WG if stale | fired by timer |
 
@@ -513,7 +517,7 @@ sudoedit /etc/kallon/device.env
 Then:
 
 1. `sudo scripts/kallon-jetson-install.sh --env /etc/kallon/device.env`
-2. Enable `kallon-enroll.service`
+2. Enable `kallon-enroll.service` and `kallon-enroll.timer` (auto-retries until enrolled)
 3. `sudo scripts/kallon-acceptance.sh --env /etc/kallon/device.env`
 
 ### Phase D — First boot in field

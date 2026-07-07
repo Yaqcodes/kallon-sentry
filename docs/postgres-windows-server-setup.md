@@ -402,6 +402,19 @@ icacls C:\kallon\config\enrollment-api.env /inheritance:r /grant:r "Administrato
 > **Do not** follow `field-test-setup.md` §B5 “Add peer on hub” in production.
 > That section exists only for Path B lab runs with `KALLON_PEER_BACKEND=noop`.
 
+> **The code now defaults to `subprocess`** if `KALLON_PEER_BACKEND` is unset
+> at all — an unconfigured production deploy fails loudly (missing script /
+> SSH key, logged at startup) instead of silently doing nothing. `noop` only
+> ever activates when set explicitly, and every use logs at `ERROR`. Still set
+> `KALLON_PEER_BACKEND=subprocess` in `enrollment-api.env` anyway — explicit
+> beats implicit.
+>
+> `KALLON_ADDPEER_CMD` is also optional now: if unset, the API resolves an
+> **absolute** path to `scripts/kallon-gateway-add-peer.sh` from the repo root,
+> so it works regardless of the service's working directory (a common footgun
+> — NSSM's `AppDirectory` is usually `infra\enrollment-api`, not the repo
+> root, which broke the old relative-path default).
+
 ### 7.4 Enrollment API service + public HTTPS
 
 §7.3 is only the **config file**. This section is how the API runs 24/7 and how
@@ -480,12 +493,61 @@ $repo = "C:\Users\Artemis\Documents\kallon-sentry"
 & $nssm set kallon-enrollment-api AppDirectory "$repo\infra\enrollment-api"
 & $nssm set kallon-enrollment-api AppEnvironmentExtra "KALLON_REGISTRY=postgres" "DATABASE_URL=postgresql://kallon:PASSWORD@127.0.0.1:5432/kallon"
 # Or use NSSM "Environment" tab / import from enrollment-api.env — all §7.3 vars required
+
+# Zero-maintenance service behavior: auto-restart on crash, start on boot,
+# and (belt-and-suspenders) also capture raw stdout/stderr to files. The app
+# itself already writes structured logs to C:\kallon\logs\enrollment-api.log
+# (rotated automatically) regardless of these — see "Viewing logs" below.
+& $nssm set kallon-enrollment-api Start SERVICE_AUTO_START
+& $nssm set kallon-enrollment-api AppExit Default Restart
+& $nssm set kallon-enrollment-api AppRestartDelay 3000
+New-Item -ItemType Directory -Force -Path C:\kallon\logs | Out-Null
+& $nssm set kallon-enrollment-api AppStdout C:\kallon\logs\enrollment-api.nssm.log
+& $nssm set kallon-enrollment-api AppStderr C:\kallon\logs\enrollment-api.nssm.log
+& $nssm set kallon-enrollment-api AppRotateFiles 1
+& $nssm set kallon-enrollment-api AppRotateOnline 1
+& $nssm set kallon-enrollment-api AppRotateBytes 10485760
+
 & $nssm start kallon-enrollment-api
 ```
 
 Alternatively point NSSM at a small wrapper that loads `C:\kallon\config\enrollment-api.env` (same vars as §7.3).
 
 Verify after reboot: `curl http://127.0.0.1:8000/healthz`
+
+#### Viewing logs (the real error, not just "it failed")
+
+The API writes structured logs — including full tracebacks and the raw
+`stderr` from any failed `kallon-gateway-add-peer.sh` invocation — to a
+rotating file, independent of how the process is launched (terminal, NSSM,
+systemd all otherwise vary in whether they capture stdout):
+
+| Where | Path |
+|-------|------|
+| Windows (default) | `C:\kallon\logs\enrollment-api.log` |
+| Linux (default) | `/var/log/kallon/enrollment-api.log` |
+| Override | `KALLON_ENROLLMENT_LOG_FILE` in `enrollment-api.env` |
+| NSSM raw stdout/stderr (belt-and-suspenders, see above) | `C:\kallon\logs\enrollment-api.nssm.log` |
+
+```powershell
+Get-Content C:\kallon\logs\enrollment-api.log -Tail 100 -Wait
+```
+
+What to look for:
+
+- **`NOOP peer add`** (logged at `ERROR`) — `KALLON_PEER_BACKEND=noop` is active;
+  the hub was never touched. Fix the env var and restart the service.
+- **`add_peer attempt N/3 failed`** — the SSH call to the hub failed; the
+  message includes the SSH/script `stderr` (bad key, wrong `--ssh-user`, hub
+  unreachable, `kallon-gateway-add-peer.sh` not found). The API retries 3x
+  automatically before giving up on that request.
+- **`peer-add misconfigured`** / **`KALLON_OPS_SSH_IDENTITY_FILE ... does not
+  exist`** — logged once at startup if the subprocess backend is missing its
+  script or SSH key, so a bad deploy is visible immediately, not on the first
+  real tower.
+- A tower stuck on `WARN no recent handshake`: check this log for the matching
+  `add_peer` line for that `device_id` first — if the hub-side add failed or
+  never ran, the handshake was never going to happen.
 
 #### Step 3 — TLS reverse proxy (public internet)
 
@@ -705,8 +767,8 @@ must share one durable registry.
 
 - [ ] `python infra/fulfillment/cli.py <slug> --display-name "…" --towers N --cameras M …`
 - [ ] On each Jetson: SCP `device.env` + `alert.key` to `/tmp/`, then install both to `/etc/kallon/` (mode `0640`, run `sed` on both if copied from Windows — see `docs/identity-and-secrets.md` §3.2)
-- [ ] `kallon-jetson-install.sh` + `kallon-enroll.service`
-- [ ] Ship → first boot auto-enrolls (no manual peer-add)
+- [ ] `kallon-jetson-install.sh` + `kallon-enroll.service` + `kallon-enroll.timer`
+- [ ] Ship → first boot auto-enrolls (no manual peer-add); timer retries every 3 min if the first attempt fails
 
 **Skip in production:**
 
@@ -717,9 +779,9 @@ must share one durable registry.
 **Automated enroll flow (no manual peer step):**
 
 ```text
-Tower boot → kallon-enroll.service
+Tower boot → kallon-enroll.service (+ kallon-enroll.timer retries every 3 min on failure)
   → POST /v1/enroll (HTTPS)
-  → API: Postgres allocate IP + SSH add-peer on hub (terra-hub-ops.pem)
+  → API: Postgres allocate IP + SSH add-peer on hub (terra-hub-ops.pem, retried 3x)
   → Jetson: wg0 up → handshake → POST /v1/enroll/confirm → .enrolled
 ```
 

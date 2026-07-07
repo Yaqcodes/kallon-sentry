@@ -19,6 +19,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import logging
+import logging.handlers
 import os
 import secrets
 import sys
@@ -33,12 +34,54 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from registry import Conflict, NotFound, get_registry  # noqa: E402
 from registry.identity import validate  # noqa: E402
 
+from . import peering  # noqa: E402
 from .peering import get_peer_adder  # noqa: E402
 
-logging.basicConfig(level=logging.INFO)
+
+def _configure_logging() -> None:
+    """Always write to a rotating file, regardless of how the process is
+    launched (bare terminal, NSSM service, systemd — none of which reliably
+    capture stdout without extra operator configuration). Falls back to
+    console-only logging if the log directory isn't writable, so a logging
+    problem can never take down the API itself.
+    """
+    handlers: list[logging.Handler] = [logging.StreamHandler()]
+    log_file = os.environ.get(
+        "KALLON_ENROLLMENT_LOG_FILE",
+        r"C:\kallon\logs\enrollment-api.log" if os.name == "nt" else "/var/log/kallon/enrollment-api.log",
+    )
+    try:
+        Path(log_file).parent.mkdir(parents=True, exist_ok=True)
+        handlers.append(
+            logging.handlers.RotatingFileHandler(
+                log_file, maxBytes=10 * 1024 * 1024, backupCount=5, encoding="utf-8"
+            )
+        )
+    except OSError as exc:  # noqa: BLE001
+        logging.basicConfig(level=logging.INFO)
+        logging.getLogger("enrollment").warning(
+            "could not open log file %s (%s); logging to console only", log_file, exc
+        )
+        return
+    logging.basicConfig(
+        level=os.environ.get("KALLON_ENROLLMENT_LOG_LEVEL", "INFO"),
+        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+        handlers=handlers,
+    )
+    logging.getLogger("enrollment").info("logging to %s", log_file)
+
+
+_configure_logging()
 log = logging.getLogger("enrollment")
 
 app = FastAPI(title="Kallon Enrollment API", version="1.0")
+
+
+@app.on_event("startup")
+def _startup_checks() -> None:
+    # Never raises — logs everything an operator needs to fix a misconfigured
+    # deploy before it strands a real tower. See peering.startup_check().
+    peering.startup_check()
 
 # In-memory confirm-token store (device_id -> sha256 hex). Single-process v1;
 # move to a short-TTL table/redis if the API is scaled horizontally.
@@ -139,12 +182,23 @@ async def enroll(request: Request) -> EnrollResponse:
             vpn_ip = tower.vpn_ip
         else:
             vpn_ip = tower.vpn_ip or reg.allocate_ip(tower.customer_id)
-            get_peer_adder().add_peer(
-                gateway_host=cust.gateway_endpoint.split(":")[0],
-                pubkey=payload.wg_public_key,
-                vpn_ip=vpn_ip,
-                device_id=tower.device_id,
-            )
+            try:
+                get_peer_adder().add_peer(
+                    gateway_host=cust.gateway_endpoint.split(":")[0],
+                    pubkey=payload.wg_public_key,
+                    vpn_ip=vpn_ip,
+                    device_id=tower.device_id,
+                )
+            except RuntimeError:
+                # Full traceback + subprocess stderr goes to the log file — this
+                # is the "real error" to check first when a tower can't get a
+                # WireGuard handshake. IP is not yet persisted, so the tower's
+                # own retry loop will safely re-attempt allocation + peer-add.
+                log.exception("peer-add failed for device=%s", tower.device_id)
+                raise HTTPException(
+                    status_code=502,
+                    detail="hub peer-add failed; the tower will retry automatically",
+                )
             reg.mark_tower_enrolled(tower.device_id, wg_public_key=payload.wg_public_key, vpn_ip=vpn_ip)
             reg.audit("tower_enrolled", entity_id=tower.device_id, actor="enrollment-api",
                       payload_json={"vpn_ip": vpn_ip})

@@ -84,6 +84,14 @@ On the Windows Server, `C:\kallon\config\enrollment-api.env` (or Linux
 hubs. Not one PEM per VPS. Postgres binds `localhost` only; the API binds
 `127.0.0.1:8000` with TLS on `:443`. Towers use `ENROLLMENT_URL=https://enroll.<domain>/v1`.
 
+> `KALLON_PEER_BACKEND` **defaults to `subprocess`** if unset — the API refuses
+> to silently no-op peer-add in an unconfigured deployment. `noop` only
+> activates if you set it explicitly (tests / deliberate Path B lab runs), and
+> every use logs at `ERROR` so it can't be mistaken for normal production
+> behavior. Still set it explicitly in `enrollment-api.env` for clarity — see
+> `docs/postgres-windows-server-setup.md` §7.4 for where the logs land and how
+> to read them.
+
 ### Key facts
 
 - The **enrollment token is one-time**: the registry stores only its SHA-256

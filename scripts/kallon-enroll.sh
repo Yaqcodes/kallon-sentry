@@ -10,6 +10,10 @@
 #   6. Touch /etc/kallon/.enrolled so the one-shot service never re-runs.
 #
 # Idempotent + safe to retry. Guarded by /etc/kallon/.enrolled.
+# Two layers of retry, so a single flaky run never strands a tower:
+#   * within a run: MAX_TRIES POSTs to /v1/enroll with backoff (network blips)
+#   * across runs: kallon-enroll.timer re-invokes this whole script every few
+#     minutes until .enrolled exists (systemd-level, zero maintenance)
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -18,6 +22,13 @@ ENV_FILE="/etc/kallon/device.env"
 ENROLLED_MARKER="/etc/kallon/.enrolled"
 MAX_TRIES="${MAX_TRIES:-30}"
 SLEEP_BASE="${SLEEP_BASE:-5}"
+# How long to wait for a live handshake after wg-quick comes up. The hub now
+# adds the peer over SSH inside /v1/enroll (with its own retries), which can
+# take longer than a bare local check — give it real margin before giving up.
+# A failed run here is NOT the end of the world: kallon-enroll.timer retries
+# the whole flow every few minutes until /etc/kallon/.enrolled exists.
+HANDSHAKE_TRIES="${HANDSHAKE_TRIES:-24}"
+HANDSHAKE_POLL_SEC="${HANDSHAKE_POLL_SEC:-5}"
 
 log() { printf '\033[0;36m[enroll] %s\033[0m\n' "$*"; }
 ok()  { printf '\033[0;32m[enroll] %s\033[0m\n' "$*"; }
@@ -96,11 +107,12 @@ systemctl restart wg-quick@wg0 || die "wg-quick@wg0 failed to start"
 
 # ── 5. wait for handshake, then confirm ───────────────────────────────────────
 hs_ok=false
-for _ in $(seq 1 12); do
+for attempt in $(seq 1 "$HANDSHAKE_TRIES"); do
   hs="$(wg show wg0 latest-handshakes 2>/dev/null | awk '{print $2; exit}')"
   now="$(date +%s)"
   if [[ -n "${hs:-}" && "$hs" != "0" && $((now - hs)) -lt 180 ]]; then hs_ok=true; break; fi
-  sleep 5
+  log "waiting for handshake ($attempt/$HANDSHAKE_TRIES)..."
+  sleep "$HANDSHAKE_POLL_SEC"
 done
 
 confirm_body="$(jq -n --arg d "$DEVICE_ID" --arg t "$CONFIRM_TOKEN" --argjson ok "$($hs_ok && echo true || echo false)" \

@@ -705,8 +705,10 @@ cd /path/to/kallon-repo
 sudo scripts/kallon-jetson-install.sh --env /etc/kallon/device.env
 
 sudo cp deploy/kallon-enroll.service.example /etc/systemd/system/kallon-enroll.service
+sudo cp deploy/kallon-enroll.timer.example /etc/systemd/system/kallon-enroll.timer
 sudo systemctl daemon-reload
 sudo systemctl enable kallon-enroll.service
+sudo systemctl enable --now kallon-enroll.timer
 
 sudo scripts/kallon-acceptance.sh --env /etc/kallon/device.env
 ```
@@ -721,6 +723,7 @@ sudo scripts/kallon-acceptance.sh --env /etc/kallon/device.env
 | `kallon-jetson-install.sh` | modules 00–99 | network, mediamtx, wg, systemd |
 | `kallon-acceptance.sh` | local checks | camera route, RTSP, HMAC dry-run |
 | `kallon-enroll.service` | `kallon-enroll.sh` at boot | skipped if `.enrolled` exists |
+| `kallon-enroll.timer` | re-fires `kallon-enroll.service` every 3 min | auto-retries until `.enrolled` exists |
 
 ---
 
@@ -850,7 +853,7 @@ can work while the NOC peer fails if this rule is missing.
 - [ ] SCP **both** `device_*.env` + `alert.key` → Jetson `/etc/kallon/`
 - [ ] Same `alert.key` on every tower for that hub
 - [ ] `kallon-jetson-install.sh` + acceptance PASS
-- [ ] `kallon-enroll.service` enabled
+- [ ] `kallon-enroll.service` enabled, `kallon-enroll.timer` enabled (auto-retry)
 - [ ] Enroll → registry `active`, peer on hub
 - [ ] `ffprobe rtsp://<vpn-ip>:8554/cam1` from VPN peer
 

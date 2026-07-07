@@ -196,10 +196,19 @@ Verify it is enabled:
 
 ```bash
 systemctl is-enabled kallon-enroll.service   # → enabled
+systemctl is-enabled kallon-enroll.timer     # → enabled
 ```
 
 > **Why a service and not a manual script?** On production towers, enrollment happens
 > automatically at the customer site on first boot with no ops intervention required.
+>
+> **Why a timer too?** `kallon-enroll.timer` re-runs the enroll flow every few
+> minutes (`OnUnitActiveSec=3min`) until `/etc/kallon/.enrolled` exists. If the
+> first boot attempt fails — Wi-Fi not associated yet, enrollment API briefly
+> down, hub SSH hiccup — the tower keeps quietly retrying on its own instead of
+> being stuck until someone notices and reboots it. Once enrolled, every tick
+> is an instant no-op (`ConditionPathExists` guard), so it's safe to leave
+> running forever.
 
 ---
 
@@ -248,7 +257,16 @@ Expected final log: `enrollment complete for kln_<slug>_000001`
 | `401 invalid enrollment token` | Token mismatch — re-run `register-tower` on control plane and update `ENROLLMENT_TOKEN` |
 | `409 hub not provisioned` | Run `python -m registry.cli set-hub --status active` on Artemis |
 | Enrollment HTTP fails | Check `ENROLLMENT_URL` and internet connectivity on `WAN_IFACE` |
-| No WireGuard handshake | Check enrollment API logs for `add_peer` / SSH failure to hub |
+| No WireGuard handshake | Check enrollment API's log file (`C:\kallon\logs\enrollment-api.log` or `/var/log/kallon/enrollment-api.log`) for the `add_peer` line for this device — see `docs/postgres-windows-server-setup.md` §7.4 "Viewing logs" |
+
+If enrollment fails on the bench run above, don't manually retry in a loop —
+`kallon-enroll.timer` (once module 75 is installed) will keep retrying the
+whole flow every 3 minutes on its own. Watch it with:
+
+```bash
+journalctl -u kallon-enroll.service -f
+systemctl list-timers kallon-enroll.timer
+```
 
 Verify registry state (on Artemis):
 
@@ -339,6 +357,7 @@ Flatpak wrapper at any of those names works.
 [ ] alert.key copied (matches the hub)
 [ ] kallon-jetson-install.sh ran without module failures
 [ ] kallon-enroll.service enabled
+[ ] kallon-enroll.timer enabled (auto-retries until enrolled)
 [ ] kallon-acceptance.sh → ACCEPTANCE PASSED
 [ ] kallon-enroll.sh ran → enrollment complete
 [ ] Registry shows status=active, vpn_ip allocated

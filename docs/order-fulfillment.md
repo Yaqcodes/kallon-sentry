@@ -137,7 +137,7 @@ sudoedit /etc/kallon/device.env   # CAMERA_PASSWORD, iface names, etc.
 **3. Then:**
 
 1. `sudo scripts/kallon-jetson-install.sh --env /etc/kallon/device.env`
-2. Enable `kallon-enroll.service`
+2. Enable `kallon-enroll.service` and `kallon-enroll.timer` (auto-retries until enrolled)
 3. `sudo scripts/kallon-acceptance.sh --env /etc/kallon/device.env` → ship
 
 ---
@@ -272,7 +272,7 @@ Repeated on the **Terra factory bench** for each Jetson. Buyer not involved.
 | 3.4 | **Factory tech** | Edit `device.env`: set `CAMERA_PASSWORD`, WAN/camera iface for production VLAN profile if needed; on each Dahua camera set **substream to H.264** in the web UI when you provision IP/credentials | Jetson + camera LAN |
 | 3.5 | **Factory tech** | Install hub `alert.key` → `/etc/kallon/alert.key` (same bytes as hub; mode `0640`) | Hub VPS → Jetson |
 | 3.6 | **Jetson installer** | `sudo scripts/kallon-jetson-install.sh --env /etc/kallon/device.env` | Jetson (modules 00–99: network, mediamtx, watchdog, firewall) |
-| 3.7 | **Factory tech** | Enable `kallon-enroll.service` (one-shot first boot) | Jetson systemd |
+| 3.7 | **Factory tech** | Enable `kallon-enroll.service` (one-shot first boot) + `kallon-enroll.timer` (auto-retry every 3 min until enrolled) | Jetson systemd |
 | 3.8 | **Factory tech** | Run `kallon-acceptance.sh` on bench (camera connected) | Jetson |
 | 3.9 | **Factory tech** | Print QR label from manifest `qr_payload` (`kallon://claim/clm_…`) | Physical label on tower |
 | 3.10 | **Factory tech** | Box tower; **do not** ship `fulfillment_*.json` to buyer | Factory → shipping |
@@ -305,7 +305,9 @@ Buyer still does not SSH or configure VPN.
 ## Phase 5 — First boot enrollment (automatic, per tower)
 
 Runs **on each tower** without ops CMD. Triggered by `kallon-enroll.service` if
-not yet enrolled.
+not yet enrolled, and re-triggered automatically every 3 minutes by
+`kallon-enroll.timer` if the first attempt fails (Wi‑Fi not up yet, API/hub
+briefly unreachable, etc.) — no installer visit or reboot required to recover.
 
 ### Tower 1 example (`kln_acme_000001`)
 

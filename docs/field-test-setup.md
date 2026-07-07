@@ -516,6 +516,12 @@ sudo bash scripts/kallon-jetson-install.sh --only-module 75 --env /etc/kallon/de
 | Expected | Runs once at boot if not yet enrolled |
 | `ExecStart` | Must use `/usr/bin/bash …/kallon-enroll.sh` — direct exec fails with `203/EXEC` (scripts are 644 in git) |
 
+The installer module also installs and starts `kallon-enroll.timer`, which
+re-fires `kallon-enroll.service` every 3 minutes until `/etc/kallon/.enrolled`
+exists — a transient failure (Wi‑Fi not up yet, API/hub briefly down) self-heals
+without a reboot or ops visit. Safe to leave enabled forever; post-enrollment
+ticks are instant no-ops.
+
 ---
 
 ### 5.4 Acceptance gate
@@ -731,7 +737,7 @@ python -m registry.cli register-tower --slug lab --serial 2
 
 - [ ] `register-tower` on server; `ENROLLMENT_TOKEN` baked in `device.env`
 - [ ] `kallon-jetson-install.sh` completes without module failure
-- [ ] `kallon-enroll.service` enabled (or `kallon-enroll.sh` succeeded once)
+- [ ] `kallon-enroll.service` enabled (or `kallon-enroll.sh` succeeded once), `kallon-enroll.timer` enabled
 - [ ] `kln_lab_000001` tower `active`, `vpn_ip` allocated — **no manual add-peer**
 - [ ] `kallon-acceptance.sh` → `ACCEPTANCE PASSED`
 - [ ] `wg show wg0` handshake &lt; 180 s on Jetson and hub
