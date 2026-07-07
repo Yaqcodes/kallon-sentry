@@ -571,6 +571,10 @@ Install factory env and alert key into `/etc/kallon/` first — see
 - Registry:
   - `python -m registry.cli list-customers`
   - `python -m registry.cli list-towers --customer <id>`
+  - `python -m registry.cli set-tower-status --device <id> --status suspended` — pull a
+    misbehaving/decommissioned tower out of rotation without deleting it. `/v1/enroll`
+    rejects suspended towers with `403` instead of touching the hub. Reverse with
+    `--status enrolled` (or `active`).
 - Hub:
   - `sudo wg show wg0`
   - `sudo ufw status verbose` — must include route rule: **allow in on wg0 out on wg0**

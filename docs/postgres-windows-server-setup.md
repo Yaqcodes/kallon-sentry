@@ -549,6 +549,19 @@ What to look for:
   `add_peer` line for that `device_id` first — if the hub-side add failed or
   never ran, the handshake was never going to happen.
 
+Every API error response now includes a specific, readable `detail` (which
+endpoint, which tower/customer, why, and what to run to fix it) instead of a
+bare status code. `502`/`500` responses also include a `request_id` — grep
+the log for that same id to jump straight to the full traceback:
+
+```powershell
+Select-String -Path C:\kallon\logs\enrollment-api.log -Pattern "a1b2c3d4"
+```
+
+A suspended tower (`registry.cli set-tower-status --status suspended`) gets a
+clear `403` on enroll instead of silently touching the hub — use this to pull
+a misbehaving or decommissioned tower out of rotation.
+
 #### Step 3 — TLS reverse proxy (public internet)
 
 Install **Caddy for Windows** or **nginx** on the same server. Example Caddy site block

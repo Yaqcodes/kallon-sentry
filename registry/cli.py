@@ -11,6 +11,7 @@ Examples:
   python -m registry.cli allocate-ip --customer cust_acme
   python -m registry.cli get-config --device kln_acme_000042
   python -m registry.cli list-towers --customer cust_acme
+  python -m registry.cli set-tower-status --device kln_acme_000042 --status suspended
 """
 from __future__ import annotations
 
@@ -126,6 +127,17 @@ def cmd_list_towers(reg, args) -> int:
     return 0
 
 
+def cmd_set_tower_status(reg, args) -> int:
+    # suspended: the enrollment API rejects /v1/enroll for this device_id
+    # (403) instead of touching the hub — use this to pull a misbehaving or
+    # decommissioned tower out of rotation without deleting its registration.
+    tower = reg.set_tower_status(args.device, args.status)
+    reg.audit("tower_status_set", entity_id=args.device, actor=args.actor,
+              payload_json={"status": args.status})
+    _out(tower.to_dict())
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="kallon-registry", description=__doc__)
     p.add_argument("--registry", choices=["postgres", "sqlite"], default=None,
@@ -172,6 +184,13 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("list-towers")
     s.add_argument("--customer", default=None)
     s.set_defaults(func=cmd_list_towers)
+
+    s = sub.add_parser("set-tower-status",
+                        help="e.g. suspend a tower to pull it out of rotation without deleting it")
+    s.add_argument("--device", required=True)
+    s.add_argument("--status", required=True,
+                    choices=["manufactured", "enrolled", "active", "suspended"])
+    s.set_defaults(func=cmd_set_tower_status)
 
     return p
 
