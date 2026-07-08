@@ -235,16 +235,45 @@ main() {
   install_kiosk_autostart
 
   systemctl daemon-reload
-  systemctl enable --now kallon-tower-mjpeg-proxy.service >/dev/null 2>&1 \
-    || warn "kallon-tower-mjpeg-proxy did not start."
-  systemctl enable --now kallon-tower-dashboard.service >/dev/null 2>&1 \
-    || warn "kallon-tower-dashboard did not start."
-  systemctl enable --now kallon-tower-alert-listener.service >/dev/null 2>&1 \
-    || warn "kallon-tower-alert-listener did not start."
 
-  # Pick up TOWER_STATUS_API_* / ALERT_WEBHOOK_URL_LOCAL defaults in the watchdog.
-  if systemctl is-active --quiet kallon-watchdog.service 2>/dev/null; then
+  # Each service reads device.env live (EnvironmentFile) and runs code synced
+  # above, so restart only when its unit, device.env, or code changed. A plain
+  # re-run leaves the dashboard/kiosk view untouched.
+  local any_changed=0
+
+  local mjpeg_changed=0
+  if inputs_changed tower-mjpeg-proxy \
+        /etc/systemd/system/kallon-tower-mjpeg-proxy.service \
+        "$KALLON_ENV" \
+        "$DASH_DIR/mjpeg_proxy.py"; then
+    mjpeg_changed=1; any_changed=1
+  fi
+  apply_service_change "$mjpeg_changed" kallon-tower-mjpeg-proxy.service
+
+  local dash_changed=0
+  if inputs_changed tower-dashboard \
+        /etc/systemd/system/kallon-tower-dashboard.service \
+        "$KALLON_ENV" \
+        "$DASH_DIR/gateway.py"; then
+    dash_changed=1; any_changed=1
+  fi
+  apply_service_change "$dash_changed" kallon-tower-dashboard.service
+
+  local alert_changed=0
+  if inputs_changed tower-alert-listener \
+        /etc/systemd/system/kallon-tower-alert-listener.service \
+        "$KALLON_ENV" \
+        "$APP_DIR/alert_listener.py"; then
+    alert_changed=1; any_changed=1
+  fi
+  apply_service_change "$alert_changed" kallon-tower-alert-listener.service
+
+  # When the dashboard is (re)configured, the watchdog needs a restart to pick
+  # up TOWER_STATUS_API_* / ALERT_WEBHOOK_URL_LOCAL — but only if something here
+  # actually changed, so we don't bounce it on every re-run.
+  if [[ "$any_changed" == "1" ]] && systemctl is-active --quiet kallon-watchdog.service 2>/dev/null; then
     systemctl restart kallon-watchdog.service >/dev/null 2>&1 \
+      && ok "kallon-watchdog restarted to pick up dashboard status API" \
       || warn "kallon-watchdog restart failed (status API may stay off until manual restart)."
   fi
 
