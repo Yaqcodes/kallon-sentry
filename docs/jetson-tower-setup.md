@@ -171,9 +171,19 @@ This runs modules **00 → 99** in order. The full list:
 | **60-camera-route** | Systemd unit pins camera IPs to camera iface | `rendered kallon-camera-route.service` |
 | **70-app** | Copy app to `/opt/kallon`, pip install | `app installed to /opt/kallon` |
 | **80-watchdogs** | Watchdog + PTZ systemd units, generate `alert.key` if missing | `rendered kallon-watchdog.service` |
-| **85-tower-dashboard** | Local kiosk dashboard (**only if `ENABLE_TOWER_DASHBOARD=1`**) | `disabled` on production towers |
+| **85-tower-dashboard** | Local Sentinel kiosk UI (**only if `ENABLE_TOWER_DASHBOARD=1`**) | `disabled` on production towers |
 | **90-firewall** | iptables: TCP 8554 → lo + wg0 only | `firewall rules applied` |
 | **99-acceptance** | Runs acceptance checks | See Step 7 |
+
+The on-Jetson dashboard is a React app (`infra/tower-dashboard/sentinel-console/`)
+built to static files in `infra/tower-dashboard/web/` and served by `gateway.py` on
+loopback (`http://127.0.0.1:8766`). It talks **only to the tower** (config, streams,
+status, alerts, PTZ) — not to the hub. To change the UI, rebuild on a dev machine
+with Node and commit the updated `web/` bundle:
+
+```bash
+cd infra/tower-dashboard/sentinel-console && npm install && npm run build
+```
 
 If a module fails, fix the specific issue and re-run just that module:
 

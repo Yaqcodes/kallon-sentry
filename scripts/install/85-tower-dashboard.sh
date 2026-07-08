@@ -54,7 +54,8 @@ sync_dashboard_files() {
   install_if_changed "$MJPEG_SRC"   "$DASH_DIR/mjpeg_proxy.py" 0644 root "$RUNTIME_USER" || true
   install_if_changed "$LISTENER_SRC" "$APP_DIR/alert_listener.py" 0644 root "$RUNTIME_USER" || true
 
-  # Sync the static web tree (SPA + vendored hls.js).
+  # Sync the static web tree (Vite build output from sentinel-console/).
+  # Rebuild with: cd infra/tower-dashboard/sentinel-console && npm run build
   rm -rf "$DASH_DIR/web"
   cp -r "$WEB_SRC" "$DASH_DIR/web"
   chown -R root:"$RUNTIME_USER" "$DASH_DIR/web"
