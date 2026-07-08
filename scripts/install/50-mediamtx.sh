@@ -137,7 +137,14 @@ main() {
   fi
   install_if_changed "$REPO_DIR/deploy/mediamtx.service.example" /etc/systemd/system/mediamtx.service 0644 || true
   systemctl daemon-reload
-  systemctl enable --now mediamtx.service >/dev/null 2>&1 || warn "mediamtx.service did not start (check cameras)."
+
+  # Restart only when the binary, rendered config, or unit actually changed, so
+  # re-running the module never drops a live RTSP stream for nothing.
+  local changed=0
+  if inputs_changed mediamtx "$MEDIAMTX_BIN" "$MEDIAMTX_YML" /etc/systemd/system/mediamtx.service; then
+    changed=1
+  fi
+  apply_service_change "$changed" mediamtx.service
   ok "mediamtx module complete"
 }
 

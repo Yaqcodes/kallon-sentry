@@ -136,9 +136,28 @@ main() {
   write_watchdog_unit
   write_ptz_unit
   systemctl daemon-reload
-  systemctl enable --now kallon-watchdog.service >/dev/null 2>&1 || warn "kallon-watchdog did not start."
+
+  # These services read device.env live (EnvironmentFile) and run code copied by
+  # 70-app.sh, so restart when the unit, device.env, or the daemon code changed.
+  # A plain re-run with no changes leaves them running untouched.
+  local wd_changed=0
+  if inputs_changed watchdog \
+        /etc/systemd/system/kallon-watchdog.service \
+        "$KALLON_ENV" \
+        "$APP_DIR/kallon_watchdog.py"; then
+    wd_changed=1
+  fi
+  apply_service_change "$wd_changed" kallon-watchdog.service
+
   if [[ -f /etc/systemd/system/kallon-ptz-daemon.service ]]; then
-    systemctl enable --now kallon-ptz-daemon.service >/dev/null 2>&1 || warn "kallon-ptz-daemon did not start."
+    local ptz_changed=0
+    if inputs_changed ptz \
+          /etc/systemd/system/kallon-ptz-daemon.service \
+          "$KALLON_ENV" \
+          "$APP_DIR/kallon_ptz_daemon.py"; then
+      ptz_changed=1
+    fi
+    apply_service_change "$ptz_changed" kallon-ptz-daemon.service
   fi
   ok "watchdog module complete"
 }

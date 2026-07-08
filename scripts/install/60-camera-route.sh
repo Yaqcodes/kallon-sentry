@@ -50,22 +50,28 @@ WantedBy=multi-user.target
 EOF
   } > "$tmp"
 
+  local changed=0
   if [[ -f "$UNIT" ]] && cmp -s "$tmp" "$UNIT"; then
     log "camera-route unit unchanged"
     rm -f "$tmp"
   else
     install -m 0644 -o root -g root "$tmp" "$UNIT"
     rm -f "$tmp"
+    changed=1
     ok "rendered $UNIT for ${#cams[@]} camera(s)"
   fi
 
   systemctl daemon-reload
   systemctl enable kallon-camera-route.service >/dev/null 2>&1 || true
+  # Always (re)assert the routes — this is idempotent and instant (no stream
+  # impact), and self-heals if routes were wiped since the last boot.
   systemctl restart kallon-camera-route.service || warn "camera-route service failed (iface $CAMERA_IFACE may be down)."
-  # Module 50 may have started mediamtx before this unit assigned CAMERA_JETSON_IP.
-  if systemctl is-enabled mediamtx.service &>/dev/null; then
+  # Only bounce mediamtx when the routes actually changed (e.g. first install,
+  # where module 50 may have started mediamtx before CAMERA_JETSON_IP existed).
+  # A plain re-run must not drop the live RTSP stream for nothing.
+  if [[ "$changed" == "1" ]] && systemctl is-enabled mediamtx.service &>/dev/null; then
     systemctl restart mediamtx.service >/dev/null 2>&1 \
-      && ok "mediamtx restarted after camera routes applied" \
+      && ok "mediamtx restarted after camera routes changed" \
       || warn "mediamtx restart failed (check journalctl -u mediamtx)"
   fi
   ok "camera-route module complete"

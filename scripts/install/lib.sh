@@ -159,6 +159,60 @@ install_if_changed() {  # install_if_changed SRC DST MODE OWNER GROUP
   return 0
 }
 
+# ── applying config changes to services ──────────────────────────────────────
+# Where we remember the inputs we last applied per service, so re-running a
+# module only restarts a service when something it depends on actually changed.
+KALLON_STATE_DIR="${KALLON_STATE_DIR:-/var/lib/kallon/applied}"
+
+# inputs_changed TAG PATH...
+# Returns 0 (true) if the combined content of the given files differs from the
+# last time this TAG was applied (first run always counts as changed), else 1.
+# Records the new hash so the next run is a no-op unless an input changes again.
+# Use this to decide whether a service that reads device.env / app code / a
+# rendered unit needs a restart — even when the change lives outside its own
+# unit file (e.g. an edited device.env or updated /opt/kallon code).
+inputs_changed() {  # inputs_changed TAG PATH...
+  local tag="$1"; shift
+  local stamp="$KALLON_STATE_DIR/${tag}.sha256" cur p
+  cur="$(
+    for p in "$@"; do
+      [[ -f "$p" ]] && sha256sum "$p"
+    done 2>/dev/null | sha256sum | awk '{print $1}'
+  )"
+  install -d -m 0755 "$KALLON_STATE_DIR" >/dev/null 2>&1 || true
+  if [[ -f "$stamp" && "$(cat "$stamp" 2>/dev/null)" == "$cur" ]]; then
+    return 1
+  fi
+  printf '%s\n' "$cur" > "$stamp" 2>/dev/null || true
+  return 0
+}
+
+# apply_service_change CHANGED SERVICE...
+# Bring services into line with freshly-rendered config so re-running a module
+# (e.g. after editing device.env) needs no manual restart:
+#   CHANGED=1 → restart so the new config takes effect (also starts if stopped).
+#   CHANGED=0 → ensure enabled + running, WITHOUT a gratuitous restart.
+apply_service_change() {  # apply_service_change CHANGED SERVICE...
+  local changed="${1:-0}"; shift || true
+  local svc
+  for svc in "$@"; do
+    systemctl enable "$svc" >/dev/null 2>&1 || true
+    if [[ "$changed" == "1" ]]; then
+      if systemctl restart "$svc" >/dev/null 2>&1; then
+        ok "restarted $svc (config changed)"
+      else
+        warn "$svc failed to restart (check: journalctl -u $svc)"
+      fi
+    else
+      if systemctl start "$svc" >/dev/null 2>&1; then
+        log "$svc already current (config unchanged)"
+      else
+        warn "$svc failed to start (check: journalctl -u $svc)"
+      fi
+    fi
+  done
+}
+
 # Run a module file by number prefix, e.g. run_module 30
 INSTALL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
