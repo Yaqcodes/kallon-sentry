@@ -20,8 +20,12 @@ REGEN=0
 PRINT_ONLY=0
 WG_CONF=/etc/wireguard/wg0.conf
 
-log() { printf '\033[0;36m%s\033[0m\n' "$*"; }
-ok()  { printf '\033[0;32m%s\033[0m\n' "$*"; }
+# Diagnostics go to STDERR so that `--print-pubkey` emits ONLY the key on
+# stdout. Otherwise callers doing PUBKEY="$(... --print-pubkey)" capture these
+# log lines too, producing a corrupt key (seen in the field as an enrollment
+# 502: the hub received the log text + ANSI codes as the "public key").
+log() { printf '\033[0;36m%s\033[0m\n' "$*" >&2; }
+ok()  { printf '\033[0;32m%s\033[0m\n' "$*" >&2; }
 die() { printf '\033[0;31mERROR: %s\033[0m\n' "$*" >&2; exit 1; }
 
 while [[ $# -gt 0 ]]; do

@@ -44,6 +44,15 @@ def check(cond, label):
         FAIL += 1
 
 
+def wgkey(prefix: str) -> str:
+    """A syntactically valid WG public key (43 base64 chars + '=') for tests.
+
+    The enrollment API validates wg_public_key format, so fixtures must look
+    like real keys. The prefix keeps each key distinct and greppable.
+    """
+    return (prefix + "A" * 43)[:43] + "="
+
+
 def provision_hub():
     """Simulate kallon-hub-provision result: active customer hub in the registry."""
     reg = get_registry()
@@ -76,7 +85,7 @@ def main() -> int:
 
     client = TestClient(app)
 
-    pubkeys = {device_id("lab", 1): "TOWER1PUB==", device_id("lab", 2): "TOWER2PUB=="}
+    pubkeys = {device_id("lab", 1): wgkey("TOWER1PUB"), device_id("lab", 2): wgkey("TOWER2PUB")}
     results = {}
     for did, pub in pubkeys.items():
         r = client.post("/v1/enroll", json={
@@ -107,13 +116,14 @@ def main() -> int:
     check("# kln_lab_000001" in conf and "# kln_lab_000002" in conf, "device-id peer comments")
 
     # idempotent: re-adding the same peer does not duplicate
-    conf2 = add_or_replace_peer(conf, "TOWER1PUB==", "10.50.0.2/32", device_id("lab", 1))
+    conf2 = add_or_replace_peer(conf, wgkey("TOWER1PUB"), "10.50.0.2/32", device_id("lab", 1))
     check(count_peers(conf2) == 2, "idempotent re-add keeps 2 peers")
 
     # rotation: same device, NEW key → old key block removed, still 2 peers
-    conf3 = add_or_replace_peer(conf2, "TOWER1ROTATED==", "10.50.0.2/32", device_id("lab", 1))
+    conf3 = add_or_replace_peer(conf2, wgkey("TOWER1ROTATED"), "10.50.0.2/32", device_id("lab", 1))
     check(count_peers(conf3) == 2, "key rotation keeps 2 peers")
-    check("TOWER1PUB==" not in conf3 and "TOWER1ROTATED==" in conf3, "old key replaced by rotated key")
+    check(wgkey("TOWER1PUB") not in conf3 and wgkey("TOWER1ROTATED") in conf3,
+          "old key replaced by rotated key")
 
     # interface block untouched
     check(conf3.startswith("[Interface]") and "ListenPort = 51820" in conf3, "interface block intact")

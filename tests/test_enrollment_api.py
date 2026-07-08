@@ -61,6 +61,15 @@ def seed():
     return tokens
 
 
+def wgkey(prefix: str) -> str:
+    """A syntactically valid WG public key (43 base64 chars + '=') for tests.
+
+    The enrollment API validates wg_public_key format, so fixtures must look
+    like real keys. The prefix keeps each key distinct and greppable.
+    """
+    return (prefix + "A" * 43)[:43] + "="
+
+
 def main() -> int:
     tokens = seed()
     from fastapi.testclient import TestClient
@@ -81,7 +90,7 @@ def main() -> int:
     # Enroll tower 1.
     d1 = device_id("lab", 1)
     r = client.post("/v1/enroll", json={
-        "device_id": d1, "wg_public_key": "TOWER1PUB==", "enrollment_token": tokens[d1],
+        "device_id": d1, "wg_public_key": wgkey("TOWER1PUB"), "enrollment_token": tokens[d1],
     })
     check(r.status_code == 200, f"enroll t1 status ({r.status_code})")
     body = r.json()
@@ -92,21 +101,27 @@ def main() -> int:
     # Idempotent re-enroll with same key returns same IP (and a fresh confirm
     # token, which supersedes the previous one — use the latest for confirm).
     r = client.post("/v1/enroll", json={
-        "device_id": d1, "wg_public_key": "TOWER1PUB==", "enrollment_token": tokens[d1],
+        "device_id": d1, "wg_public_key": wgkey("TOWER1PUB"), "enrollment_token": tokens[d1],
     })
     check(r.json()["vpn_ip"] == "10.50.0.2", "t1 re-enroll idempotent IP")
     confirm1 = r.json()["confirm_token"]
 
-    # Bad token rejected.
+    # Bad token rejected (valid key so it reaches the token check).
     r = client.post("/v1/enroll", json={
-        "device_id": d1, "wg_public_key": "x" * 8, "enrollment_token": "enr_wrong",
+        "device_id": d1, "wg_public_key": wgkey("TOWER1PUB"), "enrollment_token": "enr_wrong",
     })
     check(r.status_code == 401, f"bad token rejected ({r.status_code})")
+
+    # Malformed WG key rejected up front with a clear 422 (never reaches hub).
+    r = client.post("/v1/enroll", json={
+        "device_id": d1, "wg_public_key": "not-a-real-key", "enrollment_token": tokens[d1],
+    })
+    check(r.status_code == 422, f"malformed wg_public_key rejected ({r.status_code})")
 
     # Enroll tower 2 → next IP.
     d2 = device_id("lab", 2)
     r = client.post("/v1/enroll", json={
-        "device_id": d2, "wg_public_key": "TOWER2PUB==", "enrollment_token": tokens[d2],
+        "device_id": d2, "wg_public_key": wgkey("TOWER2PUB"), "enrollment_token": tokens[d2],
     })
     check(r.json()["vpn_ip"] == "10.50.0.3", f"t2 vpn_ip ({r.json().get('vpn_ip')})")
 

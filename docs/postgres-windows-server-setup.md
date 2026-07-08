@@ -541,6 +541,15 @@ What to look for:
   message includes the SSH/script `stderr` (bad key, wrong `--ssh-user`, hub
   unreachable, `kallon-gateway-add-peer.sh` not found). The API retries 3x
   automatically before giving up on that request.
+- **`The filename, directory name, or volume label syntax is incorrect`** — on
+  Windows the API tried to run the `.sh` script through `cmd.exe`. The default
+  peer-add backend now runs it through **Git Bash** automatically (it locates
+  `bash` on `PATH` or at `C:\Program Files\Git\bin\bash.exe`). If you see this,
+  install Git Bash, or set `KALLON_ADDPEER_CMD` explicitly (§7.3).
+- **`wg_public_key is not a valid WireGuard public key`** (`422`) — the tower
+  sent a malformed key. Almost always the tower is running an old
+  `kallon-wg-provision.sh` whose `--print-pubkey` also printed log text; update
+  the tower (`git pull`) so only the key is emitted.
 - **`peer-add misconfigured`** / **`KALLON_OPS_SSH_IDENTITY_FILE ... does not
   exist`** — logged once at startup if the subprocess backend is missing its
   script or SSH key, so a bad deploy is visible immediately, not on the first

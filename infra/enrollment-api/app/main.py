@@ -21,6 +21,7 @@ import hmac
 import logging
 import logging.handlers
 import os
+import re
 import secrets
 import sys
 from pathlib import Path
@@ -137,6 +138,10 @@ class ConfirmRequest(BaseModel):
     handshake_ok: bool = True
 
 
+# A WireGuard public key is base64 of 32 bytes: 43 base64 chars + one '='.
+_WG_PUBKEY_RE = re.compile(r"^[A-Za-z0-9+/]{43}=$")
+
+
 # ── helpers ──────────────────────────────────────────────────────────────────
 def _sha256(s: str) -> str:
     return hashlib.sha256(s.encode()).hexdigest()
@@ -174,6 +179,24 @@ async def enroll(request: Request) -> EnrollResponse:
         # Manually-parsed body (not a FastAPI signature param), so pydantic's
         # ValidationError would otherwise bubble up as a bare, detail-less 500.
         raise HTTPException(status_code=422, detail=f"invalid request body: {e.errors()}")
+
+    # Reject a malformed WG key up front with a clear message, rather than
+    # letting it reach the hub and surface as a confusing peer-add 502. A
+    # corrupt key here almost always means the tower captured log noise into
+    # its `--print-pubkey` output (fixed in kallon-wg-provision.sh).
+    key = payload.wg_public_key.strip()
+    if not _WG_PUBKEY_RE.match(key):
+        preview = key[:60].replace("\n", "\\n").replace("\r", "\\r")
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "wg_public_key is not a valid WireGuard public key (expected 44 "
+                f"base64 chars ending in '='). Got {len(key)} chars starting {preview!r}. "
+                "On the tower, verify `kallon-wg-provision.sh --print-pubkey` emits "
+                "only the key (update the tower if it prints log text too)."
+            ),
+        )
+    payload.wg_public_key = key
 
     reg = _registry()
     try:
