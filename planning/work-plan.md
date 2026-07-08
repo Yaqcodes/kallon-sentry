@@ -114,6 +114,18 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[H]` hardware-g
 
 - [H] **Exit:** live `kallon-hub-provision cust_lab` on a real VPS → RTSP over VPN *(hardware/network-gated)*
 
+### Workstream E — SDK + platform API  → `sdk-implementation-plan.md`
+
+- [x] Plan + decision log: `sdk-implementation-plan.md` (auth deferral, proxy architecture, RTSP constraint)
+- [x] Platform API contract: `../docs/platform-api.md` (error envelope, endpoint map)
+- [x] Tower gateway: REST PTZ + `GET /api/snapshot/cam<n>` + `DASH_BIND=wg0` mode (`infra/tower-dashboard/gateway.py`)
+- [x] Control plane: fleet + tower-proxy endpoints (`infra/enrollment-api/app/platform.py`); `tests/test_platform_api.py` green
+- [x] `sentinel-sdk` repo: Python client + `AlertVerifier` + Docusaurus docs (API ref, alerts/RTSP guides, tower bring-up) — <https://github.com/Yaqcodes/sentinel-sdk>
+- [ ] **Auth on platform API** (blocking external exposure — plan §5.1)
+- [ ] Module 90 iptables: restrict `:8766` to `wg0`+`lo` (plan §5.5)
+- [H] Live verification of proxy path against a real tower over VPN
+- [ ] PyPI publish + TypeScript client generation (post-validation)
+
 ### Workstream D — Pilot sign-off  → roadmap Phase 4 *(hardware-gated)*
 
 Tooling is delivered and ready to run; execution needs physical hardware.

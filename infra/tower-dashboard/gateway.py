@@ -16,6 +16,13 @@ Everything is bound to 127.0.0.1: this is a bench tool for a monitor plugged
 directly into the Jetson, never a network service. It is entirely separate
 from the Terra buyer dashboard (see docs/alert-webhook.md).
 
+Since July 2026 the gateway is ALSO the internal proxy target for the Terra
+control plane's platform API (docs/platform-api.md): when DASH_BIND=wg0 it
+binds the WireGuard interface address (keeping a loopback listener for the
+local SPA) so the control plane can reach it over the VPN. It gains REST PTZ
+endpoints and a snapshot endpoint for that purpose. SDK consumers never call
+this service directly — only the control plane does.
+
 Endpoints
 ---------
   GET  /                      -> static SPA (index.html)
@@ -25,13 +32,21 @@ Endpoints
   GET  /api/streams           -> mediamtx path readiness (proxied/simplified)
   GET  /api/status            -> watchdog status snapshot (proxied)
   GET  /api/events            -> Server-Sent Events stream of alerts
+  GET  /api/snapshot/cam<n>   -> single JPEG frame (ffmpeg, local RTSP)
+  GET  /api/ptz/status        -> current pan/tilt/zoom (?camera=n)
+  POST /api/ptz/move          -> absolute/continuous move (REST shape)
+  POST /api/ptz/stop          -> stop (or home with {"home": true})
   POST /ingest/alerts         -> receive a forwarded alert (from alert_listener)
-  POST /api/ptz               -> relay one command to the PTZ daemon
+  POST /api/ptz               -> legacy relay used by the on-Jetson SPA
 
 Environment
 -----------
-  DASH_BIND            default 127.0.0.1   (do NOT expose on the network)
+  DASH_BIND            default 127.0.0.1. May be an IP or an interface name
+                       (e.g. "wg0") which is resolved to its IPv4 address at
+                       startup; a loopback listener is kept alongside.
   DASH_PORT            default 8766
+  RTSP_LOCAL_BASE      default rtsp://127.0.0.1:8554 (snapshot source)
+  SNAPSHOT_TIMEOUT_SEC default 15 (ffmpeg frame-capture budget)
   WEB_ROOT             default <this dir>/web
   MEDIAMTX_API         default http://127.0.0.1:9997
   MEDIAMTX_HLS         default http://127.0.0.1:8888   (advertised to the browser)
@@ -48,7 +63,9 @@ import json
 import logging
 import os
 import queue
+import re
 import socket
+import subprocess
 import threading
 import urllib.request
 from datetime import datetime, timezone
@@ -69,6 +86,10 @@ WATCHDOG_STATUS_URL = os.environ.get("WATCHDOG_STATUS_URL", "http://127.0.0.1:87
 PTZ_HOST = os.environ.get("PTZ_HOST", "127.0.0.1")
 PTZ_PORT = int(os.environ.get("PTZ_PORT", "8765"))
 ALERT_HISTORY = int(os.environ.get("ALERT_HISTORY", "200"))
+RTSP_LOCAL_BASE = os.environ.get("RTSP_LOCAL_BASE", "rtsp://127.0.0.1:8554").rstrip("/")
+SNAPSHOT_TIMEOUT_SEC = float(os.environ.get("SNAPSHOT_TIMEOUT_SEC", "15"))
+
+_SNAPSHOT_RE = re.compile(r"^/api/snapshot/cam(\d+)$")
 
 PTZ_METHODS = {
     "ping",
@@ -227,6 +248,86 @@ def ptz_command(payload: dict[str, Any]) -> dict[str, Any]:
         return {"ok": False, "error": {"code": "PTZ_BAD_JSON", "message": str(exc)}}
 
 
+def snapshot_jpeg(camera: int) -> tuple[Optional[bytes], Optional[dict[str, Any]]]:
+    """Capture one JPEG frame from the local RTSP rebroadcast via ffmpeg.
+
+    Returns (jpeg_bytes, None) on success or (None, error_object) on failure.
+    """
+    n_cameras = len(camera_list())
+    if camera < 1 or (n_cameras and camera > n_cameras):
+        return None, {"code": "not_found", "message": f"camera {camera} out of range (1..{n_cameras})"}
+    url = f"{RTSP_LOCAL_BASE}/cam{camera}"
+    cmd = [
+        "ffmpeg", "-hide_banner", "-loglevel", "error",
+        "-rtsp_transport", "tcp", "-i", url,
+        "-frames:v", "1", "-f", "image2", "-c:v", "mjpeg", "pipe:1",
+    ]
+    try:
+        proc = subprocess.run(
+            cmd, capture_output=True, timeout=SNAPSHOT_TIMEOUT_SEC, check=False
+        )
+    except FileNotFoundError:
+        return None, {"code": "tower_error", "message": "ffmpeg not installed on tower"}
+    except subprocess.TimeoutExpired:
+        return None, {"code": "tower_error", "message": f"snapshot timed out after {SNAPSHOT_TIMEOUT_SEC}s"}
+    if proc.returncode != 0 or not proc.stdout:
+        stderr = proc.stderr.decode("utf-8", errors="replace").strip()[-300:]
+        return None, {"code": "tower_error", "message": f"ffmpeg failed: {stderr or 'no output'}"}
+    return proc.stdout, None
+
+
+def ptz_rest_move(payload: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+    """REST-shaped PTZ move -> daemon call. Returns (http_status, body)."""
+    mode = payload.get("mode", "absolute")
+    camera = payload.get("camera", 1)
+    if mode == "absolute":
+        params: dict[str, Any] = {"camera": camera}
+        for k in ("pan", "tilt"):
+            if k not in payload:
+                return 422, {"error": {"code": "invalid_request", "message": f"'{k}' required for absolute move"}}
+            params[k] = payload[k]
+        if payload.get("zoom") is not None:
+            params["zoom"] = payload["zoom"]
+        method = "move_absolute"
+    elif mode == "continuous":
+        params = {"camera": camera}
+        for k in ("pan", "tilt", "zoom", "seconds"):
+            if k not in payload:
+                return 422, {"error": {"code": "invalid_request", "message": f"'{k}' required for continuous move"}}
+            params[k] = payload[k]
+        method = "move_continuous"
+    else:
+        return 422, {"error": {"code": "invalid_request", "message": f"unknown mode {mode!r} (absolute|continuous)"}}
+    resp = ptz_command({"method": method, "params": params})
+    if not resp.get("ok", False):
+        return 502, {"error": {"code": "tower_error", "message": "PTZ daemon error", "ptz": resp.get("error")}}
+    return 200, {"ok": True, "result": resp.get("result", {})}
+
+
+def resolve_bind(bind: str) -> str:
+    """Resolve DASH_BIND: an IP is returned as-is; an interface name (e.g.
+    'wg0') is resolved to its IPv4 address so the gateway can serve the VPN.
+    """
+    try:
+        socket.inet_aton(bind)
+        return bind
+    except OSError:
+        pass
+    # Interface name — resolve via `ip -4 addr show <iface>` (Linux towers).
+    try:
+        out = subprocess.run(
+            ["ip", "-4", "-o", "addr", "show", bind],
+            capture_output=True, text=True, timeout=5, check=True,
+        ).stdout
+        m = re.search(r"inet (\d+\.\d+\.\d+\.\d+)/", out)
+        if m:
+            return m.group(1)
+    except (OSError, subprocess.SubprocessError):
+        pass
+    log.warning("could not resolve DASH_BIND=%r to an address; falling back to 127.0.0.1", bind)
+    return "127.0.0.1"
+
+
 # ---------------------------------------------------------------------------
 # HTTP handler
 # ---------------------------------------------------------------------------
@@ -275,6 +376,10 @@ class Handler(BaseHTTPRequestHandler):
             self._status()
         elif path == "/api/events":
             self._events()
+        elif path == "/api/ptz/status":
+            self._ptz_status()
+        elif _SNAPSHOT_RE.match(path):
+            self._snapshot(int(_SNAPSHOT_RE.match(path).group(1)))  # type: ignore[union-attr]
         else:
             self._static(path)
 
@@ -287,8 +392,12 @@ class Handler(BaseHTTPRequestHandler):
             self._ingest()
         elif path == "/api/ptz":
             self._ptz()
+        elif path == "/api/ptz/move":
+            self._ptz_move()
+        elif path == "/api/ptz/stop":
+            self._ptz_stop()
         else:
-            self._json(404, {"error": "not found"})
+            self._json(404, {"error": {"code": "not_found", "message": f"no route {path}"}})
 
     # -- endpoint impls ----------------------------------------------------
     def _streams(self) -> None:
@@ -339,6 +448,61 @@ class Handler(BaseHTTPRequestHandler):
             self._json(400, {"error": "body must be an object"})
             return
         self._json(200, ptz_command(payload))
+
+    # -- REST PTZ + snapshot (platform proxy surface) ------------------------
+    def _read_json_object(self) -> Optional[dict[str, Any]]:
+        try:
+            payload = json.loads(self._read_body() or b"{}")
+        except json.JSONDecodeError:
+            self._json(422, {"error": {"code": "invalid_request", "message": "body is not valid JSON"}})
+            return None
+        if not isinstance(payload, dict):
+            self._json(422, {"error": {"code": "invalid_request", "message": "body must be a JSON object"}})
+            return None
+        return payload
+
+    def _ptz_move(self) -> None:
+        payload = self._read_json_object()
+        if payload is None:
+            return
+        status, body = ptz_rest_move(payload)
+        self._json(status, body)
+
+    def _ptz_stop(self) -> None:
+        payload = self._read_json_object()
+        if payload is None:
+            return
+        method = "home" if payload.get("home") else "stop"
+        resp = ptz_command({"method": method, "params": {"camera": payload.get("camera", 1)}})
+        if not resp.get("ok", False):
+            self._json(502, {"error": {"code": "tower_error", "message": "PTZ daemon error", "ptz": resp.get("error")}})
+            return
+        self._json(200, {"ok": True, "result": resp.get("result", {})})
+
+    def _ptz_status(self) -> None:
+        query = self.path.split("?", 1)[1] if "?" in self.path else ""
+        camera = 1
+        for part in query.split("&"):
+            if part.startswith("camera="):
+                try:
+                    camera = int(part.split("=", 1)[1])
+                except ValueError:
+                    self._json(422, {"error": {"code": "invalid_request", "message": "camera must be an integer"}})
+                    return
+        resp = ptz_command({"method": "status", "params": {"camera": camera}})
+        if not resp.get("ok", False):
+            self._json(502, {"error": {"code": "tower_error", "message": "PTZ daemon error", "ptz": resp.get("error")}})
+            return
+        self._json(200, {"ok": True, "result": resp.get("result", {})})
+
+    def _snapshot(self, camera: int) -> None:
+        jpeg, err = snapshot_jpeg(camera)
+        if err is not None:
+            status = 404 if err.get("code") == "not_found" else 502
+            self._json(status, {"error": err})
+            return
+        assert jpeg is not None
+        self._send(200, jpeg, "image/jpeg")
 
     def _events(self) -> None:
         self.send_response(200)
@@ -391,17 +555,30 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
-    httpd = ThreadingHTTPServer((DASH_BIND, DASH_PORT), Handler)
+    bind = resolve_bind(DASH_BIND)
+    httpd = ThreadingHTTPServer((bind, DASH_PORT), Handler)
     httpd.daemon_threads = True
+    # When bound to a VPN address (platform proxy mode), keep a loopback
+    # listener too so the on-Jetson SPA / kiosk keeps working unchanged.
+    lo_httpd: Optional[ThreadingHTTPServer] = None
+    if bind != "127.0.0.1":
+        try:
+            lo_httpd = ThreadingHTTPServer(("127.0.0.1", DASH_PORT), Handler)
+            lo_httpd.daemon_threads = True
+            threading.Thread(target=lo_httpd.serve_forever, daemon=True).start()
+        except OSError as exc:
+            log.warning("loopback listener unavailable: %s", exc)
     log.info(
-        "tower dashboard gateway on %s:%d (web_root=%s, mediamtx_api=%s, hls=%s, mjpeg=%s, status=%s, ptz=%s:%d)",
-        DASH_BIND, DASH_PORT, WEB_ROOT, MEDIAMTX_API, MEDIAMTX_HLS, MJPEG_PROXY,
+        "tower dashboard gateway on %s:%d (bind=%s, web_root=%s, mediamtx_api=%s, hls=%s, mjpeg=%s, status=%s, ptz=%s:%d)",
+        bind, DASH_PORT, DASH_BIND, WEB_ROOT, MEDIAMTX_API, MEDIAMTX_HLS, MJPEG_PROXY,
         WATCHDOG_STATUS_URL, PTZ_HOST, PTZ_PORT,
     )
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
         httpd.shutdown()
+        if lo_httpd:
+            lo_httpd.shutdown()
 
 
 if __name__ == "__main__":
