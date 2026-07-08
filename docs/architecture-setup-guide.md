@@ -325,7 +325,9 @@ $repo = "C:\Users\Artemis\Documents\kallon-sentry"
 
 & $nssm install kallon-enrollment-api $python "-m" "uvicorn" "app.main:app" "--host" "127.0.0.1" "--port" "8000"
 & $nssm set kallon-enrollment-api AppDirectory "$repo\infra\enrollment-api"
-# Set ALL vars from enrollment-api.env via AppEnvironmentExtra or NSSM GUI
+# No env vars needed here — the API loads C:\kallon\config\enrollment-api.env
+# itself at startup. (nssm.exe is not on PATH; call it by full path via `& $nssm`,
+# or add its folder to PATH. See postgres-windows-server-setup.md §7.4.)
 
 & $nssm start kallon-enrollment-api
 curl http://127.0.0.1:8000/healthz

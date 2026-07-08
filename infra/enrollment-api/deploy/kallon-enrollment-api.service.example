@@ -15,14 +15,18 @@ Type=simple
 User=kallon
 Group=kallon
 WorkingDirectory=/opt/kallon/infra/enrollment-api
+# systemd reads this file into the process env. The API ALSO loads it itself at
+# startup (from /etc/kallon/enrollment-api.env, override via KALLON_ENROLLMENT_ENV_FILE),
+# so the file is authoritative even if launched some other way.
 EnvironmentFile=/etc/kallon/enrollment-api.env
 # enrollment-api.env provides (production — required):
 #   DATABASE_URL=postgresql://kallon:...@127.0.0.1:5432/kallon
 #   KALLON_REGISTRY=postgres
 #   KALLON_OPS_SSH_PUBKEY_FILE=/etc/kallon/terra-hub-ops.pub   # one ops key; all hubs
+#   KALLON_OPS_SSH_IDENTITY_FILE=/etc/kallon/terra-hub-ops.pem # required for unattended SSH
 #   KALLON_PEER_BACKEND=subprocess            # required in prod; noop = manual peer add (dev only)
-#   KALLON_ADDPEER_CMD=.../kallon-gateway-add-peer.sh --gateway-host {gateway_host} ...
 #   ENROLLMENT_HMAC_KEY=<service secret>     (optional but recommended)
+# KALLON_ADDPEER_CMD is optional — omit it to use the built-in bash+argv default.
 # Windows Server: see docs/postgres-windows-server-setup.md §7
 ExecStart=/opt/kallon/venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000
 Restart=on-failure

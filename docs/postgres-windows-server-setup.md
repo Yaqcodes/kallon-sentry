@@ -373,14 +373,12 @@ using the ops key above. No manual `kallon-gateway-add-peer.sh` per tower.
 Prerequisites: **Git Bash** (for the add-peer script), **OpenSSH client**, ops key
 configured as in §7.1–7.2.
 
-Create `C:\kallon\config\enrollment-api.env` (adjust paths):
+Create `C:\kallon\config\enrollment-api.env`. **This file is the single source
+of truth** — the API loads it automatically at startup (see §7.4), so you do
+**not** need to duplicate these into NSSM.
 
 ```powershell
 New-Item -ItemType Directory -Force -Path C:\kallon\config | Out-Null
-
-$repo = "C:\path\to\kallon-sentry\CODE"
-$bash = "C:\Program Files\Git\bin\bash.exe"
-$addPeer = "$repo\scripts\kallon-gateway-add-peer.sh"
 
 @"
 KALLON_REGISTRY=postgres
@@ -388,7 +386,6 @@ DATABASE_URL=postgresql://kallon:YOUR_PASSWORD@127.0.0.1:5432/kallon
 KALLON_OPS_SSH_PUBKEY_FILE=C:\kallon\secrets\terra-hub-ops.pub
 KALLON_OPS_SSH_IDENTITY_FILE=C:\kallon\secrets\terra-hub-ops.pem
 KALLON_PEER_BACKEND=subprocess
-KALLON_ADDPEER_CMD="$bash" "$addPeer" --gateway-host {gateway_host} --pubkey {pubkey} --vpn-ip {vpn_ip} --device-id {device_id} --ssh-user ubuntu
 "@ | Set-Content C:\kallon\config\enrollment-api.env -Encoding UTF8
 
 icacls C:\kallon\config\enrollment-api.env /inheritance:r /grant:r "Administrators:(F)" "SYSTEM:(F)"
@@ -397,7 +394,16 @@ icacls C:\kallon\config\enrollment-api.env /inheritance:r /grant:r "Administrato
 | Variable | Production value |
 |----------|------------------|
 | `KALLON_PEER_BACKEND` | **`subprocess`** — never `noop` in prod |
-| `KALLON_ADDPEER_CMD` | Invokes `kallon-gateway-add-peer.sh`; API fills `{gateway_host}` etc. from the registry |
+| `KALLON_OPS_SSH_IDENTITY_FILE` | Path to `terra-hub-ops.pem` — **required** for unattended SSH peer-add |
+| `KALLON_ADDPEER_CMD` | **Leave unset (recommended).** The API auto-runs `scripts/kallon-gateway-add-peer.sh` through Git Bash with a correctly-quoted argv. Only set this for a non-standard invocation. |
+
+> ⚠️ **Do not** paste a `KALLON_ADDPEER_CMD` containing `$bash` or `$addPeer`.
+> Those are PowerShell variables — they only resolve if the here-string above
+> actually interpolates them at write-time. A hand-edited or copy-pasted file
+> keeps them **literal**, and the API cannot run `$bash` (you'll see
+> *"filename … syntax is incorrect"*). The API now detects an unexpanded
+> `$var` in this template, logs an error, and falls back to its built-in
+> default — but the clean fix is simply to omit the line.
 
 > **Do not** follow `field-test-setup.md` §B5 “Add peer on hub” in production.
 > That section exists only for Path B lab runs with `KALLON_PEER_BACKEND=noop`.
@@ -481,18 +487,29 @@ Stop uvicorn when done — this does **not** survive reboot.
 
 #### Step 2 — Install uvicorn as a Windows service (NSSM)
 
-1. Download [NSSM](https://nssm.cc/download) and extract `nssm.exe`.
-2. Install the service (run as Administrator; adjust paths):
+1. Download [NSSM](https://nssm.cc/download) and extract `nssm.exe` (e.g. to `C:\kallon\nssm.exe`).
+2. **`nssm` is not on PATH by default** — that's why a bare `nssm ...` command
+   fails. Either call it by full path via `& $nssm ...` (as below), or add its
+   folder to PATH once:
+   ```powershell
+   # permanent (machine-wide) — new shells afterwards can call `nssm` directly
+   [Environment]::SetEnvironmentVariable(
+     "Path", $env:Path + ";C:\kallon", "Machine")
+   ```
+   To find an existing install: `(Get-ItemProperty "HKLM:\SYSTEM\CurrentControlSet\Services\kallon-enrollment-api").ImagePath`
+3. Install the service (run as Administrator; adjust paths):
 
 ```powershell
-$nssm = "C:\path\to\nssm.exe"
+$nssm = "C:\kallon\nssm.exe"
 $python = (Get-Command python).Source
 $repo = "C:\Users\Artemis\Documents\kallon-sentry"
 
 & $nssm install kallon-enrollment-api $python "-m" "uvicorn" "app.main:app" "--host" "127.0.0.1" "--port" "8000"
 & $nssm set kallon-enrollment-api AppDirectory "$repo\infra\enrollment-api"
-& $nssm set kallon-enrollment-api AppEnvironmentExtra "KALLON_REGISTRY=postgres" "DATABASE_URL=postgresql://kallon:PASSWORD@127.0.0.1:5432/kallon"
-# Or use NSSM "Environment" tab / import from enrollment-api.env — all §7.3 vars required
+# NO env vars needed here: the API loads C:\kallon\config\enrollment-api.env
+# itself at startup (§7.3). Only set AppEnvironmentExtra if your env file is in
+# a non-default location:
+#   & $nssm set kallon-enrollment-api AppEnvironmentExtra "KALLON_ENROLLMENT_ENV_FILE=D:\somewhere\enrollment-api.env"
 
 # Zero-maintenance service behavior: auto-restart on crash, start on boot,
 # and (belt-and-suspenders) also capture raw stdout/stderr to files. The app
@@ -511,7 +528,10 @@ New-Item -ItemType Directory -Force -Path C:\kallon\logs | Out-Null
 & $nssm start kallon-enrollment-api
 ```
 
-Alternatively point NSSM at a small wrapper that loads `C:\kallon\config\enrollment-api.env` (same vars as §7.3).
+The API loads `C:\kallon\config\enrollment-api.env` on startup, so there is no
+need for a wrapper script or duplicated NSSM environment entries. To confirm it
+loaded, look for `loaded N env var(s) from ...` near the top of the log after a
+restart (see "Viewing logs" below).
 
 Verify after reboot: `curl http://127.0.0.1:8000/healthz`
 

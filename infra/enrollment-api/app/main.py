@@ -40,6 +40,58 @@ from . import peering  # noqa: E402
 from .peering import get_peer_adder  # noqa: E402
 
 
+def _bootstrap_env_file() -> None:
+    """Load enrollment-api.env into os.environ so that file is the single
+    source of truth regardless of how the process is launched.
+
+    Why this exists: NSSM (the prescribed Windows service manager) injects env
+    vars ONLY from its own AppEnvironmentExtra registry setting — it never reads
+    enrollment-api.env. A bare terminal needs load-control-plane.ps1 dot-sourced
+    in the same window. Both are easy to get subtly wrong, stranding a tower
+    with a half-configured API. Loading the file here makes the file itself
+    authoritative for every launch method.
+
+    Precedence: an already-set environment variable WINS (the file only fills in
+    what's missing), so an explicit NSSM/shell override is still honored.
+    """
+    default = (
+        r"C:\kallon\config\enrollment-api.env" if os.name == "nt"
+        else "/etc/kallon/enrollment-api.env"
+    )
+    env_file = os.environ.get("KALLON_ENROLLMENT_ENV_FILE", default)
+    path = Path(env_file)
+    if not path.is_file():
+        return
+    loaded = 0
+    try:
+        # utf-8-sig transparently strips a BOM if the file was saved from a
+        # Windows editor / PowerShell Set-Content.
+        for raw in path.read_text(encoding="utf-8-sig").splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, val = line.split("=", 1)
+            key = key.strip()
+            val = val.strip()
+            # Strip ONE pair of matching surrounding quotes only (leaves an
+            # inner-quoted value like a command template intact).
+            if len(val) >= 2 and val[0] == val[-1] and val[0] in ('"', "'"):
+                val = val[1:-1]
+            if not key or key in os.environ:
+                continue
+            os.environ[key] = val
+            loaded += 1
+    except OSError as exc:  # noqa: BLE001
+        print(f"[enrollment] could not read {env_file}: {exc}", file=sys.stderr)
+        return
+    # Logging isn't configured yet — emit to stderr so it lands in NSSM's
+    # AppStderr log and in a terminal.
+    print(f"[enrollment] loaded {loaded} env var(s) from {env_file}", file=sys.stderr)
+
+
+_bootstrap_env_file()
+
+
 def _configure_logging() -> None:
     """Always write to a rotating file, regardless of how the process is
     launched (bare terminal, NSSM service, systemd — none of which reliably

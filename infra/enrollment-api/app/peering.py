@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -49,6 +50,18 @@ PEER_ADD_RETRY_BACKOFF_SEC = float(os.environ.get("KALLON_PEER_ADD_RETRY_BACKOFF
 
 class PeerAdder(Protocol):
     def add_peer(self, *, gateway_host: str, pubkey: str, vpn_ip: str, device_id: str) -> None: ...
+
+
+def _template_has_unexpanded_var(tpl: str) -> bool:
+    """True if the template contains a `$name` shell/PowerShell variable.
+
+    The supported placeholders are brace-style ({gateway_host} etc.), so any
+    `$word` is almost certainly an unexpanded variable copied verbatim from the
+    docs' PowerShell snippet (e.g. KALLON_ADDPEER_CMD="$bash" "$addPeer" ...).
+    cmd.exe/bash can't resolve those, so the command would fail with a cryptic
+    "filename ... syntax is incorrect". Detect it and fall back to the default.
+    """
+    return bool(re.search(r"\$\w+", tpl))
 
 
 def find_bash() -> str | None:
@@ -163,6 +176,15 @@ def get_peer_adder() -> PeerAdder:
         log.warning("unknown KALLON_PEER_BACKEND=%r; defaulting to subprocess", backend)
 
     tpl = os.environ.get("KALLON_ADDPEER_CMD")
+    if tpl and _template_has_unexpanded_var(tpl):
+        log.error(
+            "KALLON_ADDPEER_CMD contains an unexpanded shell variable (e.g. $bash / "
+            "$addPeer) - this is the literal text from the docs' PowerShell snippet, "
+            "not real paths, and cannot run. Ignoring it and using the built-in "
+            "bash+argv default. Fix or remove the KALLON_ADDPEER_CMD line. Value: %s",
+            tpl,
+        )
+        tpl = None
     if tpl:
         return SubprocessPeerAdder(tpl)
 
@@ -197,6 +219,14 @@ def startup_check() -> None:
 
     tpl = os.environ.get("KALLON_ADDPEER_CMD", "")
     script_path = DEFAULT_ADDPEER_SCRIPT
+
+    if tpl and _template_has_unexpanded_var(tpl):
+        log.error(
+            "KALLON_ADDPEER_CMD contains an unexpanded shell variable (e.g. $bash) and "
+            "will be IGNORED; the built-in bash+argv default will be used instead. "
+            "Fix or remove the KALLON_ADDPEER_CMD line in enrollment-api.env."
+        )
+        tpl = ""
 
     if tpl:
         log.info("peer-add backend=subprocess ready (KALLON_ADDPEER_CMD template set)")
