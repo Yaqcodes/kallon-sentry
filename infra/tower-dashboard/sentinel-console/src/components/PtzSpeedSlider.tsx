@@ -17,7 +17,6 @@ export function speedToVelocity(pct: number): number {
  * hold on the pad repeats short pulses while pressed.
  */
 export default function PtzSpeedSlider({ value, onChange, accent }: Props) {
-  const vel = speedToVelocity(value);
   return (
     <div className="ptz-speed">
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
@@ -25,7 +24,7 @@ export default function PtzSpeedSlider({ value, onChange, accent }: Props) {
           DRIVE SPEED
         </span>
         <span style={{ fontFamily: font.mono, fontSize: 11, color: colors.textBright, letterSpacing: '.08em' }}>
-          {value}% <span style={{ color: colors.textFaint }}>({vel.toFixed(2)})</span>
+          {value}%
         </span>
       </div>
       <input
@@ -37,10 +36,11 @@ export default function PtzSpeedSlider({ value, onChange, accent }: Props) {
         value={value}
         onChange={(e) => onChange(Number(e.target.value))}
         aria-label="PTZ drive speed"
+        title="Slower for fine aim, faster for sweeping"
         style={{ ['--accent' as string]: accent }}
       />
-      <div style={{ fontFamily: font.mono, fontSize: 9, letterSpacing: '.06em', color: colors.textFaint, lineHeight: 1.5 }}>
-        Tap or arrow keys: fixed {0.2}s nudge · hold pad to jog · lower speed for fine aim
+      <div style={{ fontFamily: font.mono, fontSize: 9, letterSpacing: '.06em', color: colors.textFaint }}>
+        Slower = finer moves
       </div>
     </div>
   );

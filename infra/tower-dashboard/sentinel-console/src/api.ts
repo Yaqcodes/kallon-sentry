@@ -79,6 +79,7 @@ export interface GwAlert {
 
 export interface PtzResult {
   ok?: boolean;
+  result?: { pan?: number; tilt?: number; zoom?: number; [k: string]: unknown };
   error?: { code?: string; message?: string };
   [k: string]: unknown;
 }

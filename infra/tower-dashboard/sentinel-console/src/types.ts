@@ -18,13 +18,13 @@ export interface Camera {
   hlsUrl?: string;
 
   /**
-   * Optimistic PTZ readout. The cameras expose no reliable absolute-position
-   * feedback over the loopback PTZ relay, so these track the operator's own
-   * inputs as an on-screen estimate while the pad drives real continuous moves.
+   * Live PTZ readout from ONVIF GetStatus (polled via the gateway).
+   * ptzLive is false until the first successful poll for this camera.
    */
-  az: number; // azimuth estimate, 0–359°
-  el: number; // elevation estimate
-  zoom: number; // zoom estimate, 1.0–8.0×
+  az: number;
+  el: number;
+  zoom: number;
+  ptzLive: boolean;
 
   recording: boolean;
   recStart: number | null;

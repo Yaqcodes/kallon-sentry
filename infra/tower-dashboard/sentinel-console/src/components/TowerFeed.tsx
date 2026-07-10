@@ -2,6 +2,7 @@ import { useState } from 'react';
 import type { CSSProperties } from 'react';
 import type { Camera } from '../types';
 import { colors, font } from '../tokens';
+import { formatZoom } from '../ptzMetrics';
 import CameraVideo from './CameraVideo';
 
 interface Props {
@@ -110,9 +111,12 @@ export default function TowerFeed({
         </div>
       </div>
 
-      {/* bottom strip: live PTZ / zoom readout (operator estimate) */}
+      {/* bottom strip: live PTZ / zoom from camera */}
       <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', background: 'linear-gradient(0deg,rgba(6,9,11,.72),transparent)', fontFamily: font.mono, fontSize: 10, letterSpacing: '.1em', color: colors.textFaint, pointerEvents: 'none' }}>
-        <span>PTZ {pad3(camera.az)}·{elFmt(camera.el)} &nbsp; Z{camera.zoom.toFixed(1)}×</span>
+        <span>
+          PTZ {pad3(camera.az)}·{elFmt(camera.el)}
+          &nbsp; {camera.ptzLive ? `Z${formatZoom(camera.zoom)}` : 'Z—'}
+        </span>
         <span>RTSP · LIVE</span>
       </div>
 

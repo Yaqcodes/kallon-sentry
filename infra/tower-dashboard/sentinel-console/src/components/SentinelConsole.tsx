@@ -6,6 +6,8 @@ import { health, levelColor } from '../util';
 import { buildSensors } from '../sensors';
 import { ptz, snapshot } from '../api';
 import { useTower } from '../useTower';
+import { usePtzPositions } from '../usePtzPositions';
+import { formatZoom } from '../ptzMetrics';
 import TowerFeed from './TowerFeed';
 import PtzPad, { type PanDir } from './PtzPad';
 import PtzSpeedSlider, { speedToVelocity } from './PtzSpeedSlider';
@@ -13,15 +15,12 @@ import SensorBar from './SensorBar';
 import SensorPanel from './SensorPanel';
 
 const ACCENT = colors.accent;
-const PAN_STEP = 6;
-const TILT_STEP = 3;
 const ZOOM_STEP = 0.3;
 const PTZ_PULSE_SEC = 0.2;   // fixed tap/hold pulse — distance scales with speed slider
 const PTZ_HOLD_MS = 180;     // press longer than this → jog instead of single nudge
 const PTZ_JOG_MS = 280;      // repeat interval while holding pad
 const PTZ_SPEED_KEY = 'sentinel-ptz-speed';
 
-const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
 const pad3 = (n: number) => String(((Math.round(n) % 360) + 360) % 360).padStart(3, '0');
 const elFmt = (e: number) => (e >= 0 ? '+' : '-') + String(Math.abs(Math.round(e))).padStart(2, '0');
 
@@ -30,14 +29,9 @@ const isFormField = (el: EventTarget | null) => {
   return !!t && (t.tagName === 'INPUT' || t.tagName === 'SELECT' || t.tagName === 'TEXTAREA' || t.isContentEditable);
 };
 
-interface Estimate { az: number; el: number; zoom: number }
-
 export default function SentinelConsole() {
   const { config, streams, status, alerts, connected } = useTower();
 
-  // Operator's PTZ estimate per camera (no reliable absolute feedback exists
-  // over the loopback relay, so we track our own inputs for the HUD readout).
-  const [estimates, setEstimates] = useState<Record<string, Estimate>>({});
   const [selectedCamId, setSelectedCamId] = useState<string>('');
   const [now, setNow] = useState(() => Date.now());
   const [controlOpen, setControlOpen] = useState(true);
@@ -64,11 +58,18 @@ export default function SentinelConsole() {
     return m;
   }, [streams]);
 
+  const cameraNums = useMemo(
+    () => (config?.cameras ?? []).map((c) => c.camera),
+    [config],
+  );
+
+  const { positions, refreshSoon } = usePtzPositions(cameraNums, readyByPath, selectedCamId);
+
   const cameras: Camera[] = useMemo(() => {
     const gw = config?.cameras ?? [];
     return gw.map((c) => {
       const id = String(c.camera).padStart(2, '0');
-      const est = estimates[id] ?? { az: 0, el: 0, zoom: 1.0 };
+      const pos = positions[id];
       let cstatus: CameraStatus = 'STANDBY';
       if (streams && streams.available) cstatus = readyByPath.get(c.path) ? 'ONLINE' : 'OFFLINE';
       return {
@@ -78,13 +79,16 @@ export default function SentinelConsole() {
         status: cstatus,
         mjpegUrl: c.mjpeg_url ?? undefined,
         hlsUrl: c.hls_url || undefined,
-        az: est.az, el: est.el, zoom: est.zoom,
+        az: pos?.az ?? 0,
+        el: pos?.el ?? 0,
+        zoom: pos?.zoom ?? 0,
+        ptzLive: !!pos,
         recording: false,
         recStart: null,
         homeAz: 0, homeEl: 0,
       };
     });
-  }, [config, streams, readyByPath, estimates]);
+  }, [config, streams, readyByPath, positions]);
 
   const deviceName = (config?.device_id || 'SENTINEL TOWER').toUpperCase();
   const selectedCam = cameras.find((c) => c.id === selectedCamId) ?? cameras[0];
@@ -100,10 +104,6 @@ export default function SentinelConsole() {
 
   const camNum = useCallback((id: string) => parseInt(id, 10) || 1, []);
 
-  const bumpEstimate = useCallback((id: string, fn: (e: Estimate) => Estimate) => {
-    setEstimates((prev) => ({ ...prev, [id]: fn(prev[id] ?? { az: 0, el: 0, zoom: 1.0 }) }));
-  }, []);
-
   const feedback = useCallback((res: { ok?: boolean; error?: { message?: string } }, verb: string) => {
     if (res && res.ok === false) setPtzMsg(`${verb} failed: ${res.error?.message ?? 'error'}`);
     else setPtzMsg(`${verb} ok`);
@@ -113,17 +113,6 @@ export default function SentinelConsole() {
     setPtzSpeedPct(pct);
     try { localStorage.setItem(PTZ_SPEED_KEY, String(pct)); } catch { /* noop */ }
   }, []);
-
-  const bumpForDir = useCallback((id: string, dir: PanDir, zoomDelta = 0) => {
-    const p = dir === 'left' ? -1 : dir === 'right' ? 1 : 0;
-    const t = dir === 'up' ? 1 : dir === 'down' ? -1 : 0;
-    const scale = ptzVelocity;
-    bumpEstimate(id, (e) => ({
-      az: (e.az + p * PAN_STEP * scale + 360) % 360,
-      el: clamp(e.el + t * TILT_STEP * scale, -20, 30),
-      zoom: zoomDelta ? clamp(Number((e.zoom + zoomDelta * scale).toFixed(1)), 1.0, 8.0) : e.zoom,
-    }));
-  }, [bumpEstimate, ptzVelocity]);
 
   const sendMove = useCallback((dir: PanDir | null, zoomDir: number, seconds: number) => {
     const cam = camNum(selectedCam?.id ?? '01');
@@ -135,8 +124,8 @@ export default function SentinelConsole() {
       tilt: t * ptzVelocity,
       zoom: zoomDir * ptzVelocity,
       seconds,
-    });
-  }, [selectedCam, camNum, ptzVelocity]);
+    }).then((r) => { refreshSoon(); return r; });
+  }, [selectedCam, camNum, ptzVelocity, refreshSoon]);
 
   const stopJog = useCallback(() => {
     if (jogTimer.current !== undefined) {
@@ -150,15 +139,14 @@ export default function SentinelConsole() {
     if (jogging.current) {
       jogging.current = false;
       const cam = camNum(selectedCam?.id ?? '01');
-      void ptz('stop', { camera: cam });
+      void ptz('stop', { camera: cam }).then(() => refreshSoon());
     }
     jogDir.current = null;
-  }, [selectedCam, camNum]);
+  }, [selectedCam, camNum, refreshSoon]);
 
   const nudge = useCallback((dir: PanDir) => {
     void sendMove(dir, 0, PTZ_PULSE_SEC).then((r) => feedback(r, 'move'));
-    if (selectedCam) bumpForDir(selectedCam.id, dir);
-  }, [sendMove, feedback, selectedCam, bumpForDir]);
+  }, [sendMove, feedback]);
 
   const panStart = useCallback((dir: PanDir) => {
     stopJog();
@@ -167,13 +155,11 @@ export default function SentinelConsole() {
       jogTimer.current = undefined;
       jogging.current = true;
       void sendMove(dir, 0, PTZ_PULSE_SEC);
-      if (selectedCam) bumpForDir(selectedCam.id, dir);
       jogInterval.current = window.setInterval(() => {
         void sendMove(dir, 0, PTZ_PULSE_SEC);
-        if (selectedCam) bumpForDir(selectedCam.id, dir);
       }, PTZ_JOG_MS);
     }, PTZ_HOLD_MS);
-  }, [stopJog, sendMove, selectedCam, bumpForDir]);
+  }, [stopJog, sendMove]);
 
   const panEnd = useCallback(() => {
     if (jogTimer.current !== undefined) {
@@ -193,13 +179,7 @@ export default function SentinelConsole() {
   const zoomBy = useCallback((d: number) => {
     const dir = d > 0 ? 1 : -1;
     void sendMove(null, dir, PTZ_PULSE_SEC).then((r) => feedback(r, 'zoom'));
-    if (selectedCam) {
-      bumpEstimate(selectedCam.id, (e) => ({
-        ...e,
-        zoom: clamp(Number((e.zoom + d * ptzVelocity).toFixed(1)), 1.0, 8.0),
-      }));
-    }
-  }, [sendMove, feedback, selectedCam, bumpEstimate, ptzVelocity]);
+  }, [sendMove, feedback]);
 
   const captureSnapshot = useCallback(async (camId: string) => {
     const cam = camNum(camId);
@@ -213,9 +193,8 @@ export default function SentinelConsole() {
 
   const recenter = useCallback(() => {
     const cam = camNum(selectedCam?.id ?? '01');
-    ptz('home', { camera: cam }).then((r) => feedback(r, 'home'));
-    if (selectedCam) bumpEstimate(selectedCam.id, () => ({ az: 0, el: 0, zoom: 1.0 }));
-  }, [selectedCam, camNum, bumpEstimate, feedback]);
+    ptz('home', { camera: cam }).then((r) => { feedback(r, 'home'); refreshSoon(); });
+  }, [selectedCam, camNum, feedback, refreshSoon]);
 
   // 1 Hz clock
   useEffect(() => {
@@ -330,9 +309,9 @@ export default function SentinelConsole() {
             </div>
 
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-              <Metric k="AZIMUTH" v={`${pad3(selectedCam.az)}°`} />
-              <Metric k="ELEVATION" v={`${elFmt(selectedCam.el)}°`} />
-              <Metric k="ZOOM" v={`${selectedCam.zoom.toFixed(1)}×`} />
+              <Metric k="AZIMUTH" v={selectedCam.ptzLive ? `${pad3(selectedCam.az)}°` : '—'} />
+              <Metric k="ELEVATION" v={selectedCam.ptzLive ? `${elFmt(selectedCam.el)}°` : '—'} />
+              <Metric k="ZOOM" v={selectedCam.ptzLive ? formatZoom(selectedCam.zoom) : '—'} />
               <Metric k="STREAM" v={selectedCam.status === 'ONLINE' ? 'LIVE' : selectedCam.status === 'OFFLINE' ? 'DOWN' : '—'} />
             </div>
 
@@ -345,15 +324,17 @@ export default function SentinelConsole() {
             </div>
 
             <div style={{ display: 'flex', gap: 8 }}>
-              <button className="ctl-btn" onClick={() => zoomBy(-ZOOM_STEP)}>− ZOOM</button>
+              <button className="ctl-btn" onClick={() => zoomBy(-ZOOM_STEP)} title="Zoom out">− ZOOM</button>
               <div style={{ flex: '0 0 78px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', border: `1px solid ${colors.line}`, borderRadius: 6, background: colors.bgWell }}>
-                <span style={{ fontFamily: font.mono, fontSize: 16, color: colors.textBright }}>{selectedCam.zoom.toFixed(1)}×</span>
-                <span style={{ fontFamily: font.mono, fontSize: 9, letterSpacing: '.14em', color: colors.textFaint }}>OPTICAL</span>
+                <span style={{ fontFamily: font.mono, fontSize: 16, color: colors.textBright }}>
+                  {selectedCam.ptzLive ? formatZoom(selectedCam.zoom) : '—'}
+                </span>
+                <span style={{ fontFamily: font.mono, fontSize: 9, letterSpacing: '.14em', color: colors.textFaint }}>ZOOM</span>
               </div>
-              <button className="ctl-btn" onClick={() => zoomBy(ZOOM_STEP)}>ZOOM +</button>
+              <button className="ctl-btn" onClick={() => zoomBy(ZOOM_STEP)} title="Zoom in">ZOOM +</button>
             </div>
 
-            <button className="rec-btn" disabled title="Recording is configured on the device (device.env: RECORD_ENABLE)">
+            <button className="rec-btn" disabled title="Recording is managed on the device">
               <span style={{ width: 9, height: 9, borderRadius: '50%', background: colors.textFaint }} />
               RECORDING · DEVICE-MANAGED
             </button>
