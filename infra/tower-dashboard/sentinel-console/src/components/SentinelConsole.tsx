@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { Camera, CameraStatus } from '../types';
 import { colors, font } from '../tokens';
@@ -8,6 +8,7 @@ import { ptz, snapshot } from '../api';
 import { useTower } from '../useTower';
 import TowerFeed from './TowerFeed';
 import PtzPad, { type PanDir } from './PtzPad';
+import PtzSpeedSlider, { speedToVelocity } from './PtzSpeedSlider';
 import SensorBar from './SensorBar';
 import SensorPanel from './SensorPanel';
 
@@ -15,8 +16,10 @@ const ACCENT = colors.accent;
 const PAN_STEP = 6;
 const TILT_STEP = 3;
 const ZOOM_STEP = 0.3;
-const PTZ_SPEED = 0.6;      // 0..1 continuous-move speed sent to the daemon
-const PTZ_PULSE_SEC = 0.5;  // each tap/keypress nudges for this long, then auto-stops
+const PTZ_PULSE_SEC = 0.2;   // fixed tap/hold pulse — distance scales with speed slider
+const PTZ_HOLD_MS = 180;     // press longer than this → jog instead of single nudge
+const PTZ_JOG_MS = 280;      // repeat interval while holding pad
+const PTZ_SPEED_KEY = 'sentinel-ptz-speed';
 
 const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
 const pad3 = (n: number) => String(((Math.round(n) % 360) + 360) % 360).padStart(3, '0');
@@ -41,6 +44,19 @@ export default function SentinelConsole() {
   const [spotlight, setSpotlight] = useState(false);
   const [panelOpen, setPanelOpen] = useState(false);
   const [ptzMsg, setPtzMsg] = useState('');
+  const [ptzSpeedPct, setPtzSpeedPct] = useState(() => {
+    try {
+      const saved = Number(localStorage.getItem(PTZ_SPEED_KEY));
+      if (saved >= 5 && saved <= 100) return saved;
+    } catch { /* private mode */ }
+    return 35;
+  });
+
+  const ptzVelocity = useMemo(() => speedToVelocity(ptzSpeedPct), [ptzSpeedPct]);
+  const jogTimer = useRef<number | undefined>(undefined);
+  const jogInterval = useRef<number | undefined>(undefined);
+  const jogDir = useRef<PanDir | null>(null);
+  const jogging = useRef(false);
 
   const readyByPath = useMemo(() => {
     const m = new Map<string, boolean>();
@@ -93,26 +109,97 @@ export default function SentinelConsole() {
     else setPtzMsg(`${verb} ok`);
   }, []);
 
-  const pan = useCallback((dir: PanDir) => {
+  const setSpeed = useCallback((pct: number) => {
+    setPtzSpeedPct(pct);
+    try { localStorage.setItem(PTZ_SPEED_KEY, String(pct)); } catch { /* noop */ }
+  }, []);
+
+  const bumpForDir = useCallback((id: string, dir: PanDir, zoomDelta = 0) => {
+    const p = dir === 'left' ? -1 : dir === 'right' ? 1 : 0;
+    const t = dir === 'up' ? 1 : dir === 'down' ? -1 : 0;
+    const scale = ptzVelocity;
+    bumpEstimate(id, (e) => ({
+      az: (e.az + p * PAN_STEP * scale + 360) % 360,
+      el: clamp(e.el + t * TILT_STEP * scale, -20, 30),
+      zoom: zoomDelta ? clamp(Number((e.zoom + zoomDelta * scale).toFixed(1)), 1.0, 8.0) : e.zoom,
+    }));
+  }, [bumpEstimate, ptzVelocity]);
+
+  const sendMove = useCallback((dir: PanDir | null, zoomDir: number, seconds: number) => {
     const cam = camNum(selectedCam?.id ?? '01');
     const p = dir === 'left' ? -1 : dir === 'right' ? 1 : 0;
     const t = dir === 'up' ? 1 : dir === 'down' ? -1 : 0;
-    ptz('move_continuous', { camera: cam, pan: p * PTZ_SPEED, tilt: t * PTZ_SPEED, zoom: 0, seconds: PTZ_PULSE_SEC })
-      .then((r) => feedback(r, 'move'));
-    if (selectedCam) bumpEstimate(selectedCam.id, (e) => ({
-      az: (e.az + p * PAN_STEP + 360) % 360,
-      el: clamp(e.el + t * TILT_STEP, -20, 30),
-      zoom: e.zoom,
-    }));
-  }, [selectedCam, camNum, bumpEstimate, feedback]);
+    return ptz('move_continuous', {
+      camera: cam,
+      pan: p * ptzVelocity,
+      tilt: t * ptzVelocity,
+      zoom: zoomDir * ptzVelocity,
+      seconds,
+    });
+  }, [selectedCam, camNum, ptzVelocity]);
+
+  const stopJog = useCallback(() => {
+    if (jogTimer.current !== undefined) {
+      window.clearTimeout(jogTimer.current);
+      jogTimer.current = undefined;
+    }
+    if (jogInterval.current !== undefined) {
+      window.clearInterval(jogInterval.current);
+      jogInterval.current = undefined;
+    }
+    if (jogging.current) {
+      jogging.current = false;
+      const cam = camNum(selectedCam?.id ?? '01');
+      void ptz('stop', { camera: cam });
+    }
+    jogDir.current = null;
+  }, [selectedCam, camNum]);
+
+  const nudge = useCallback((dir: PanDir) => {
+    void sendMove(dir, 0, PTZ_PULSE_SEC).then((r) => feedback(r, 'move'));
+    if (selectedCam) bumpForDir(selectedCam.id, dir);
+  }, [sendMove, feedback, selectedCam, bumpForDir]);
+
+  const panStart = useCallback((dir: PanDir) => {
+    stopJog();
+    jogDir.current = dir;
+    jogTimer.current = window.setTimeout(() => {
+      jogTimer.current = undefined;
+      jogging.current = true;
+      void sendMove(dir, 0, PTZ_PULSE_SEC);
+      if (selectedCam) bumpForDir(selectedCam.id, dir);
+      jogInterval.current = window.setInterval(() => {
+        void sendMove(dir, 0, PTZ_PULSE_SEC);
+        if (selectedCam) bumpForDir(selectedCam.id, dir);
+      }, PTZ_JOG_MS);
+    }, PTZ_HOLD_MS);
+  }, [stopJog, sendMove, selectedCam, bumpForDir]);
+
+  const panEnd = useCallback(() => {
+    if (jogTimer.current !== undefined) {
+      window.clearTimeout(jogTimer.current);
+      jogTimer.current = undefined;
+      if (jogDir.current) nudge(jogDir.current);
+      jogDir.current = null;
+      return;
+    }
+    stopJog();
+  }, [nudge, stopJog]);
+
+  const pan = useCallback((dir: PanDir) => {
+    nudge(dir);
+  }, [nudge]);
 
   const zoomBy = useCallback((d: number) => {
-    const cam = camNum(selectedCam?.id ?? '01');
     const dir = d > 0 ? 1 : -1;
-    ptz('move_continuous', { camera: cam, pan: 0, tilt: 0, zoom: dir * PTZ_SPEED, seconds: PTZ_PULSE_SEC })
-      .then((r) => feedback(r, 'zoom'));
-    if (selectedCam) bumpEstimate(selectedCam.id, (e) => ({ ...e, zoom: clamp(Number((e.zoom + d).toFixed(1)), 1.0, 8.0) }));
-  }, [selectedCam, camNum, bumpEstimate, feedback]);
+    void sendMove(null, dir, PTZ_PULSE_SEC).then((r) => feedback(r, 'zoom'));
+    if (selectedCam) {
+      bumpEstimate(selectedCam.id, (e) => ({
+        ...e,
+        zoom: clamp(Number((e.zoom + d * ptzVelocity).toFixed(1)), 1.0, 8.0),
+      }));
+    }
+  }, [sendMove, feedback, selectedCam, bumpEstimate, ptzVelocity]);
 
   const captureSnapshot = useCallback(async (camId: string) => {
     const cam = camNum(camId);
@@ -135,6 +222,8 @@ export default function SentinelConsole() {
     const id = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(id);
   }, []);
+
+  useEffect(() => () => stopJog(), [stopJog]);
 
   // keyboard control
   useEffect(() => {
@@ -248,9 +337,10 @@ export default function SentinelConsole() {
             </div>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <PtzSpeedSlider value={ptzSpeedPct} onChange={setSpeed} accent={ACCENT} />
               <div style={{ fontFamily: font.mono, fontSize: 10, letterSpacing: '.24em', color: colors.textFaint }}>PAN / TILT</div>
               <div style={{ display: 'flex', justifyContent: 'center' }}>
-                <PtzPad accent={ACCENT} onPan={pan} onRecenter={recenter} />
+                <PtzPad accent={ACCENT} onPanStart={panStart} onPanEnd={panEnd} onRecenter={recenter} />
               </div>
             </div>
 
@@ -273,7 +363,7 @@ export default function SentinelConsole() {
             </div>
 
             <div style={{ marginTop: 'auto', paddingTop: 12, borderTop: `1px solid ${colors.line}`, fontFamily: font.mono, fontSize: 10, lineHeight: 1.8, color: colors.textFaint }}>
-              <Key>1–{Math.max(1, cameras.length)}</Key> select · <Key>↑↓←→</Key> drive · <Key>+ −</Key> zoom · <Key>space</Key> recenter
+              <Key>1–{Math.max(1, cameras.length)}</Key> select · <Key>↑↓←→</Key> nudge · hold pad to jog · <Key>+ −</Key> zoom · <Key>space</Key> home
             </div>
           </aside>
         )}
