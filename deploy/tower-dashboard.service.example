@@ -1,8 +1,15 @@
-# Example systemd unit for the optional on-Jetson tower lab dashboard.
-# The installer renders the real unit from scripts/install/85-tower-dashboard.sh
-# when ENABLE_TOWER_DASHBOARD=1 in /etc/kallon/device.env.
+# Example systemd unit for the on-Jetson tower gateway (lab dashboard +
+# platform proxy target). The installer renders the real unit from
+# scripts/install/85-tower-dashboard.sh when ENABLE_TOWER_DASHBOARD=1 in
+# /etc/kallon/device.env.
 #
-# Loopback only — for a monitor/keyboard plugged directly into the lab tower.
+# Two modes via DASH_BIND (see docs/platform-api.md §6):
+#   DASH_BIND=127.0.0.1  loopback-only lab dashboard (default, bench-safe)
+#   DASH_BIND=wg0        platform proxy mode — the control plane reaches
+#                        this gateway over the VPN for PTZ/snapshot/status.
+#                        A loopback listener is kept for the local SPA.
+#                        Only VPN peers can reach it; see the firewall note
+#                        in planning/sdk-implementation-plan.md §5.5.
 # NOT the Terra buyer dashboard (see docs/alert-webhook.md).
 
 [Unit]

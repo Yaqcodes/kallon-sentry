@@ -38,6 +38,7 @@ from registry.identity import validate  # noqa: E402
 
 from . import peering  # noqa: E402
 from .peering import get_peer_adder  # noqa: E402
+from .platform import router as platform_router  # noqa: E402
 
 
 def _bootstrap_env_file() -> None:
@@ -128,7 +129,11 @@ def _configure_logging() -> None:
 _configure_logging()
 log = logging.getLogger("enrollment")
 
-app = FastAPI(title="Kallon Enrollment API", version="1.0")
+app = FastAPI(title="Kallon Platform API", version="1.1")
+
+# Fleet + tower-proxy endpoints (docs/platform-api.md). Enrollment routes
+# below keep their original shapes — factory images depend on them.
+app.include_router(platform_router)
 
 
 @app.on_event("startup")
