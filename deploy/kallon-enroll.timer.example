@@ -1,0 +1,33 @@
+# Retries kallon-enroll.service every few minutes until the tower is enrolled.
+#
+# Why a timer instead of Restart=on-failure on the service: enrollment can be
+# blocked by things that take minutes to resolve (Wi-Fi not associated yet,
+# DHCP not settled, enrollment API/hub briefly unreachable). A fast restart
+# loop would just hammer the API; a timer with a few minutes between attempts
+# is patient, simple to reason about, and self-heals with zero human input.
+#
+# Safe to leave enabled forever: kallon-enroll.service is guarded by
+# ConditionPathExists=!/etc/kallon/.enrolled, so once enrolled every
+# subsequent tick is a no-op that starts and exits immediately.
+#
+#   sudo cp deploy/kallon-enroll.timer.example /etc/systemd/system/kallon-enroll.timer
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now kallon-enroll.timer
+#
+# Check progress:
+#   systemctl list-timers kallon-enroll.timer
+#   journalctl -u kallon-enroll.service -n 50
+
+[Unit]
+Description=Retry Kallon enrollment until it succeeds
+
+[Timer]
+# First retry shortly after boot (in addition to kallon-enroll.service's own
+# direct boot-time run), then every 3 minutes thereafter.
+OnBootSec=1min
+OnUnitActiveSec=3min
+AccuracySec=30s
+Persistent=false
+
+[Install]
+WantedBy=timers.target

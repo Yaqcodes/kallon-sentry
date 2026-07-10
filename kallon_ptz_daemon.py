@@ -2,10 +2,16 @@
 """
 Kallon PTZ daemon — long-running ONVIF control for Jetson (systemd).
 
-- Keeps one ONVIF session to the camera.
+- Holds one lazily-opened ONVIF session per camera (a pool), keyed by a
+  1-based camera index that matches the order of CAMERA_IPS in device.env
+  (i.e. `camera` N == mediamtx path `camN`).
 - Serves newline-delimited JSON requests over TCP (default 127.0.0.1:8765)
   or a Unix domain socket (--unix PATH, POSIX only).
 - Serializes PTZ commands with a lock (one in flight at a time).
+
+Cameras: derived from CAMERA_IPS / CAMERA_RTSP_USER / CAMERA_PASSWORD /
+CAMERA_ONVIF_PORT in the environment (device.env). A single camera can also be
+given explicitly with --host (bench mode), which becomes camera index 1.
 
 Password: set CAMERA_PASSWORD or pass -p once at startup (not per request).
 
@@ -15,18 +21,25 @@ Protocol (one JSON object per line, UTF-8, trailing \\n):
   Response: {"id": <same>, "ok": true, "result": { ... }}
             {"id": <same>, "ok": false, "error": {"code": "...", "message": "..."}}
 
+Every camera-facing method accepts an optional 1-based "camera" param that
+selects which camera to act on. It defaults to 1 when omitted, so existing
+single-camera callers keep working unchanged.
+
 Methods:
   ping             — params {}
-  status           — params { "profile"?: int }
-  move_absolute    — params { "pan", "tilt", "zoom"?: number, "profile"?: int,
+  list_cameras     — params {} ; result { "cameras": [ {"camera","ip","onvif_port","path"} ] }
+  status           — params { "camera"?: int, "profile"?: int }
+  move_absolute    — params { "camera"?: int, "pan", "tilt", "zoom"?: number, "profile"?: int,
                                "tolerance"?: float, "poll_ms"?: float, "confirm_timeout"?: float }
                      result { "ok": bool, "round_trip_ms": float }
-  move_continuous  — params { "pan", "tilt", "zoom", "seconds", "profile"?: int }
-  stop             — params { "profile"?: int }
-  home             — params { "profile"?: int }
+  move_continuous  — params { "camera"?: int, "pan", "tilt", "zoom", "seconds", "profile"?: int }
+  stop             — params { "camera"?: int, "profile"?: int }
+  home             — params { "camera"?: int, "profile"?: int }
 
 Example (TCP):
   echo '{"id":1,"method":"ping","params":{}}' | nc -q 1 127.0.0.1 8765
+  echo '{"id":2,"method":"list_cameras","params":{}}' | nc -q 1 127.0.0.1 8765
+  echo '{"id":3,"method":"move_continuous","params":{"camera":2,"pan":0.3,"tilt":0,"zoom":0,"seconds":0.4}}' | nc -q 1 127.0.0.1 8765
 """
 
 from __future__ import annotations
@@ -38,16 +51,15 @@ import logging
 import os
 import sys
 import time
+from dataclasses import dataclass
 from typing import Any, Optional
 
 from dahua_onvif_control import (
-    DEFAULT_HOST,
     DEFAULT_PASSWORD,
     DEFAULT_PORT,
     DEFAULT_REQUEST_TIMEOUT_SEC,
     DEFAULT_USER,
     connect,
-    profile_token,
     resolve_password,
     resolve_wsdl_dir,
 )
@@ -69,6 +81,95 @@ class PTZSession:
         self.default_profile = default_profile
 
 
+@dataclass(frozen=True)
+class CameraSpec:
+    """Static connection details for one camera (from device.env or --host)."""
+
+    index: int          # 1-based; matches mediamtx path camN and CAMERA_IPS order
+    host: str
+    onvif_port: int
+    user: str
+    password: str
+
+
+class CameraPool:
+    """Lazily opens and caches one ONVIF session per camera index.
+
+    Connections are created on first use for a given camera, so a single
+    offline camera does not prevent the daemon from serving the others. All
+    dispatch happens under the caller's single command lock, so no additional
+    locking is required here.
+    """
+
+    def __init__(
+        self,
+        specs: list[CameraSpec],
+        timeout: float,
+        wsdl_dir: str,
+        default_profile: int,
+    ) -> None:
+        self._specs: dict[int, CameraSpec] = {s.index: s for s in specs}
+        self._sessions: dict[int, PTZSession] = {}
+        self._timeout = timeout
+        self._wsdl_dir = wsdl_dir
+        self._default_profile = default_profile
+
+    def describe(self) -> list[dict[str, Any]]:
+        return [
+            {
+                "camera": s.index,
+                "ip": s.host,
+                "onvif_port": s.onvif_port,
+                "path": f"cam{s.index}",
+            }
+            for s in sorted(self._specs.values(), key=lambda s: s.index)
+        ]
+
+    def get(self, index: int) -> PTZSession:
+        spec = self._specs.get(index)
+        if spec is None:
+            raise ValueError(
+                f"unknown camera {index}; known cameras: "
+                f"{sorted(self._specs)}"
+            )
+        session = self._sessions.get(index)
+        if session is None:
+            session = self._open_session(spec)
+            self._sessions[index] = session
+        return session
+
+    def _open_session(self, spec: CameraSpec) -> PTZSession:
+        cam = connect(
+            spec.host,
+            spec.onvif_port,
+            spec.user,
+            spec.password,
+            self._timeout,
+            self._wsdl_dir,
+        )
+        profile = self._first_ptz_profile(cam)
+        LOG.info(
+            "opened ONVIF session camera=%d host=%s:%d profile=%d",
+            spec.index,
+            spec.host,
+            spec.onvif_port,
+            profile,
+        )
+        return PTZSession(cam, profile)
+
+    def invalidate(self, index: int) -> None:
+        self._sessions.pop(index, None)
+
+    @staticmethod
+    def _first_ptz_profile(cam: Any) -> int:
+        """Pick the first media profile that actually has PTZ configured."""
+        media = cam.create_media_service()
+        for i, prof in enumerate(media.GetProfiles()):
+            if prof.PTZConfiguration is not None:
+                return i
+        return 0
+
+
 def _profile(params: dict[str, Any], session: PTZSession) -> int:
     v = params.get("profile", session.default_profile)
     if not isinstance(v, int) or v < 0:
@@ -78,11 +179,7 @@ def _profile(params: dict[str, Any], session: PTZSession) -> int:
 
 def _continuous_move(cam: Any, profile_index: int, pan: float, tilt: float, zoom: float, seconds: float) -> None:
     ptz = _ptz_service(cam)
-    media = cam.create_media_service()
-    token = profile_token(cam, profile_index)
-    profile = next(p for p in media.GetProfiles() if p.token == token)
-    if profile.PTZConfiguration is None:
-        raise RuntimeError("This profile has no PTZ")
+    token = _require_ptz_profile(cam, profile_index)
 
     move = ptz.create_type("ContinuousMove")
     move.ProfileToken = token
@@ -98,7 +195,7 @@ def _continuous_move(cam: Any, profile_index: int, pan: float, tilt: float, zoom
 
 def _ptz_stop(cam: Any, profile_index: int) -> None:
     ptz = _ptz_service(cam)
-    token = profile_token(cam, profile_index)
+    token = _require_ptz_profile(cam, profile_index)
     stop = ptz.create_type("Stop")
     stop.ProfileToken = token
     stop.PanTilt = True
@@ -108,17 +205,52 @@ def _ptz_stop(cam: Any, profile_index: int) -> None:
 
 def _ptz_home(cam: Any, profile_index: int) -> None:
     ptz = _ptz_service(cam)
-    token = profile_token(cam, profile_index)
-    req = ptz.create_type("GotoHomePosition")
-    req.ProfileToken = token
-    req.Speed = None
-    ptz.GotoHomePosition(req)
+    token = _require_ptz_profile(cam, profile_index)
+    try:
+        req = ptz.create_type("GotoHomePosition")
+        req.ProfileToken = token
+        req.Speed = None
+        ptz.GotoHomePosition(req)
+        return
+    except Exception as exc:
+        LOG.warning("GotoHomePosition failed (%s); falling back to absolute centre", exc)
+    # Dahua cameras often lack a configured ONVIF home — snap to centre instead.
+    move = ptz.create_type("AbsoluteMove")
+    move.ProfileToken = token
+    move.Position = {"PanTilt": {"x": 0.0, "y": 0.0}, "Zoom": {"x": 0.0}}
+    move.Speed = {"PanTilt": {"x": 0.5, "y": 0.5}, "Zoom": {"x": 0.5}}
+    ptz.AbsoluteMove(move)
 
 
-def dispatch(session: PTZSession, method: str, params: dict[str, Any]) -> dict[str, Any]:
+def _resolve_camera_index(params: dict[str, Any]) -> int:
+    v = params.get("camera", 1)
+    if isinstance(v, str) and v.isdigit():
+        v = int(v)
+    if isinstance(v, float) and v.is_integer():
+        v = int(v)
+    if not isinstance(v, int) or isinstance(v, bool) or v < 1:
+        raise ValueError("camera must be a positive integer (1-based)")
+    return v
+
+
+def dispatch(pool: CameraPool, method: str, params: dict[str, Any]) -> dict[str, Any]:
     if method == "ping":
         return {"pong": True}
 
+    if method == "list_cameras":
+        return {"cameras": pool.describe()}
+
+    cam_index = _resolve_camera_index(params)
+    session = pool.get(cam_index)
+
+    try:
+        return _dispatch_ptz(pool, session, method, params)
+    except Exception:
+        pool.invalidate(cam_index)
+        raise
+
+
+def _dispatch_ptz(pool: CameraPool, session: PTZSession, method: str, params: dict[str, Any]) -> dict[str, Any]:
     if method == "status":
         idx = _profile(params, session)
         ptz = _ptz_service(session.cam)
@@ -203,7 +335,7 @@ def format_error(rid: Any, code: str, message: str) -> str:
 async def client_loop(
     reader: asyncio.StreamReader,
     writer: asyncio.StreamWriter,
-    session: PTZSession,
+    pool: CameraPool,
     cmd_lock: asyncio.Lock,
 ) -> None:
     peer = writer.get_extra_info("peername")
@@ -224,7 +356,7 @@ async def client_loop(
 
         try:
             async with cmd_lock:
-                result = await asyncio.to_thread(dispatch, session, method, params)
+                result = await asyncio.to_thread(dispatch, pool, method, params)
             writer.write(format_response(rid, result).encode())
         except Exception as e:
             LOG.exception("command failed method=%s", method)
@@ -239,11 +371,11 @@ async def client_loop(
     LOG.info("client disconnected %s", peer)
 
 
-async def run_tcp(session: PTZSession, host: str, port: int) -> None:
+async def run_tcp(pool: CameraPool, host: str, port: int) -> None:
     cmd_lock = asyncio.Lock()
 
     async def _cb(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-        await client_loop(reader, writer, session, cmd_lock)
+        await client_loop(reader, writer, pool, cmd_lock)
 
     server = await asyncio.start_server(_cb, host=host, port=port)
     LOG.info("listening TCP %s:%s", host, port)
@@ -251,7 +383,7 @@ async def run_tcp(session: PTZSession, host: str, port: int) -> None:
         await server.serve_forever()
 
 
-async def run_unix(session: PTZSession, path: str) -> None:
+async def run_unix(pool: CameraPool, path: str) -> None:
     if sys.platform == "win32":
         raise RuntimeError("Unix sockets are not used for this daemon on Windows; use TCP.")
 
@@ -263,13 +395,37 @@ async def run_unix(session: PTZSession, path: str) -> None:
     cmd_lock = asyncio.Lock()
 
     async def _cb(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-        await client_loop(reader, writer, session, cmd_lock)
+        await client_loop(reader, writer, pool, cmd_lock)
 
     server = await asyncio.start_unix_server(_cb, path=path)
     os.chmod(path, 0o600)
     LOG.info("listening Unix socket %s", path)
     async with server:
         await server.serve_forever()
+
+
+def _build_camera_specs(args: argparse.Namespace, password: str) -> list[CameraSpec]:
+    """Build the camera list from --host (bench) or CAMERA_IPS (device.env).
+
+    - Explicit --host wins and yields a single camera at index 1 (bench mode,
+      preserves the historical single-camera invocation).
+    - Otherwise cameras come from CAMERA_IPS (comma-separated), 1-based in the
+      same order used by mediamtx paths cam1..camN. All cameras share
+      CAMERA_RTSP_USER / CAMERA_PASSWORD / CAMERA_ONVIF_PORT.
+    """
+    if args.host:
+        return [CameraSpec(1, args.host, args.port, args.user, password)]
+
+    user = os.environ.get("CAMERA_RTSP_USER") or args.user
+    try:
+        onvif_port = int(os.environ.get("CAMERA_ONVIF_PORT", "") or args.port)
+    except ValueError:
+        onvif_port = args.port
+    ips = [ip.strip() for ip in os.environ.get("CAMERA_IPS", "").split(",") if ip.strip()]
+    return [
+        CameraSpec(i, ip, onvif_port, user, password)
+        for i, ip in enumerate(ips, start=1)
+    ]
 
 
 def main(argv: Optional[list[str]] = None) -> int:
@@ -281,7 +437,12 @@ def main(argv: Optional[list[str]] = None) -> int:
         default=int(os.environ.get("PTZ_LISTEN_PORT", "8765")),
     )
     parser.add_argument("--unix", default=os.environ.get("PTZ_UNIX_PATH") or None, help="Unix socket path (Linux only)")
-    parser.add_argument("--host", default=DEFAULT_HOST, help="Camera IP")
+    parser.add_argument(
+        "--host",
+        default=None,
+        help="Single camera IP (bench mode); becomes camera 1. "
+        "If omitted, cameras are read from CAMERA_IPS in the environment.",
+    )
     parser.add_argument("-P", "--port", type=int, default=DEFAULT_PORT, help="Camera ONVIF HTTP port")
     parser.add_argument("-u", "--user", default=DEFAULT_USER)
     parser.add_argument("-p", "--password", default=DEFAULT_PASSWORD)
@@ -302,23 +463,28 @@ def main(argv: Optional[list[str]] = None) -> int:
     password = resolve_password(args.password)
     wsdl_dir = resolve_wsdl_dir(args.wsdl_dir)
 
-    try:
-        cam = connect(args.host, args.port, args.user, password, args.timeout, wsdl_dir)
-    except OSError as e:
-        LOG.error("network error: %s", e)
-        return 1
-    except Exception as e:
-        LOG.error("connect/auth failed: %s", e)
+    specs = _build_camera_specs(args, password)
+    if not specs:
+        LOG.error(
+            "no cameras configured: pass --host or set CAMERA_IPS in the environment."
+        )
         return 1
 
-    session = PTZSession(cam, args.profile)
-    LOG.info("connected to camera %s:%s profile_default=%s", args.host, args.port, args.profile)
+    # Sessions are opened lazily (per camera, on first use) so one offline
+    # camera does not stop the daemon from serving the others.
+    pool = CameraPool(specs, args.timeout, wsdl_dir, args.profile)
+    LOG.info(
+        "configured %d camera(s): %s (profile_default=%s)",
+        len(specs),
+        ", ".join(f"{s.index}:{s.host}:{s.onvif_port}" for s in specs),
+        args.profile,
+    )
 
     async def _run() -> None:
         if args.unix:
-            await run_unix(session, args.unix)
+            await run_unix(pool, args.unix)
         else:
-            await run_tcp(session, args.listen_host, args.listen_port)
+            await run_tcp(pool, args.listen_host, args.listen_port)
 
     try:
         asyncio.run(_run())

@@ -1,0 +1,13 @@
+# Example Applications menu launcher for the lab tower dashboard.
+# Installed to ~/.local/share/applications/ by scripts/install/85-tower-dashboard.sh
+# when ENABLE_TOWER_DASHBOARD=1. Opens a normal (non-kiosk) browser window.
+
+[Desktop Entry]
+Type=Application
+Name=Sentinel
+Comment=Local loopback console for bench tower
+Exec=chromium-browser --app=http://127.0.0.1:8766/
+Icon=/opt/kallon/tower-dashboard/web/app_icon.png
+Terminal=false
+Categories=Network;Monitor;System;
+StartupNotify=true

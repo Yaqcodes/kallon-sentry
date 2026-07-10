@@ -1,0 +1,12 @@
+# Example GNOME/XFCE autostart entry for the lab tower kiosk browser.
+# Installed to ~/.config/autostart/ by scripts/install/85-tower-dashboard.sh
+# when ENABLE_TOWER_DASHBOARD=1 and TOWER_DASHBOARD_KIOSK=1 (default).
+
+[Desktop Entry]
+Type=Application
+Name=Sentinel
+Comment=Local loopback console for bench tower
+Exec=chromium-browser --kiosk --noerrdialogs --disable-infobars --disable-session-crashed-bubble --app=http://127.0.0.1:8766/
+Icon=/opt/kallon/tower-dashboard/web/app_icon.png
+X-GNOME-Autostart-enabled=true
+OnlyShowIn=GNOME;Unity;XFCE;

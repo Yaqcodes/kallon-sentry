@@ -1,0 +1,4 @@
+# Hub provisioner dependencies (Terra control plane).
+# Core (manual provider) needs only the stdlib + ssh/scp on PATH.
+# The Lightsail adapter additionally needs boto3 + AWS credentials.
+boto3>=1.34,<2

@@ -1,0 +1,39 @@
+# Example systemd unit for the on-Jetson tower gateway (lab dashboard +
+# platform proxy target). The installer renders the real unit from
+# scripts/install/85-tower-dashboard.sh when ENABLE_TOWER_DASHBOARD=1 in
+# /etc/kallon/device.env.
+#
+# Two modes via DASH_BIND (see docs/platform-api.md §6):
+#   DASH_BIND=127.0.0.1  loopback-only lab dashboard (default, bench-safe)
+#   DASH_BIND=wg0        platform proxy mode — the control plane reaches
+#                        this gateway over the VPN for PTZ/snapshot/status.
+#                        A loopback listener is kept for the local SPA.
+#                        Only VPN peers can reach it; see the firewall note
+#                        in planning/sdk-implementation-plan.md §5.5.
+# NOT the Terra buyer dashboard (see docs/alert-webhook.md).
+
+[Unit]
+Description=Sentinel tower dashboard gateway (loopback SPA + ingest)
+After=network-online.target mediamtx.service kallon-watchdog.service kallon-ptz-daemon.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=RUNTIME_USER
+Group=RUNTIME_USER
+WorkingDirectory=/opt/kallon/tower-dashboard
+EnvironmentFile=/etc/kallon/device.env
+Environment=DASH_BIND=127.0.0.1
+Environment=DASH_PORT=8766
+Environment=WEB_ROOT=/opt/kallon/tower-dashboard/web
+Environment=WATCHDOG_STATUS_URL=http://127.0.0.1:8770
+Environment=PTZ_HOST=127.0.0.1
+Environment=PTZ_PORT=8765
+ExecStart=/usr/bin/python3 /opt/kallon/tower-dashboard/gateway.py
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,5 @@
+node_modules/
+*.local
+.DS_Store
+npm-debug.log*
+# Build output goes to ../web (committed there, served by gateway.py).

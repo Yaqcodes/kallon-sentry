@@ -1,13 +1,12 @@
-# Example systemd unit for Jetson / Ubuntu — copy to /etc/systemd/system/kallon-ptz-daemon.service
-# and adjust user, paths, and secrets.
+# Example systemd unit for Jetson / Ubuntu — copy to /etc/systemd/system/kallon-ptz-daemon.service.
+# The installer (scripts/install/80-watchdogs.sh) renders the real unit;
+# this file is a reference for manual installs or inspection only.
+#
+# Replace RUNTIME_USER with your Jetson login (set RUNTIME_USER in /etc/kallon/device.env).
 #
 #   sudo cp deploy/kallon-ptz-daemon.service.example /etc/systemd/system/kallon-ptz-daemon.service
 #   sudo systemctl daemon-reload
 #   sudo systemctl enable --now kallon-ptz-daemon.service
-#
-# The values below match the bench Jetson layout (user `khalifa`, repo at
-# /home/khalifa/kallon). Edit if you clone the repo elsewhere or use a
-# dedicated service account.
 
 [Unit]
 Description=Kallon ONVIF PTZ daemon (JSON/TCP)
@@ -16,21 +15,23 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=khalifa
-Group=khalifa
-WorkingDirectory=/home/khalifa/kallon
+User=RUNTIME_USER
+Group=RUNTIME_USER
+WorkingDirectory=/opt/kallon
 
-# Required on production systems (overrides script default password).
-Environment=CAMERA_PASSWORD=change_me
+# Cameras are read from device.env (CAMERA_IPS, CAMERA_RTSP_USER,
+# CAMERA_PASSWORD, CAMERA_ONVIF_PORT) and exposed 1-based as camera 1..N,
+# aligned with mediamtx paths cam1..camN. This is the production path; do not
+# hard-code a single --host here. The installer renders the real unit from
+# scripts/install/80-watchdogs.sh.
+EnvironmentFile=/etc/kallon/device.env
 
-# Listen only on loopback so the daemon is reachable from ArtemisOS or other
-# local clients on the same host, but not from the network.
+# Listen only on loopback so the daemon is reachable from ArtemisOS, the tower
+# lab dashboard, or other local clients on the same host — never the network.
 Environment=PTZ_LISTEN_HOST=127.0.0.1
 Environment=PTZ_LISTEN_PORT=8765
 
-# Camera ONVIF connection — edit IP/port/user as needed for this device.
-ExecStart=/usr/bin/python3 /home/khalifa/kallon/kallon_ptz_daemon.py \
-    --host 192.168.1.108 -P 80 -u admin \
+ExecStart=/usr/bin/python3 /opt/kallon/kallon_ptz_daemon.py \
     --listen-host 127.0.0.1 --listen-port 8765
 
 Restart=on-failure

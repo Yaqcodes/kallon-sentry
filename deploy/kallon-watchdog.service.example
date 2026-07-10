@@ -1,5 +1,8 @@
 # Example systemd unit for the Kallon health & tamper watchdog.
-# Install with deploy/install-kallon-watchdog.sh, or manually:
+# The installer (scripts/install/80-watchdogs.sh) renders the real unit; this
+# file is a reference for manual installs or inspection only.
+#
+# Replace RUNTIME_USER with your Jetson login (set RUNTIME_USER in /etc/kallon/device.env).
 #
 #   sudo cp deploy/kallon-watchdog.service.example /etc/systemd/system/kallon-watchdog.service
 #   sudo systemctl daemon-reload
@@ -12,21 +15,21 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=khalifa
-Group=khalifa
-# The user must also be in the `gpio` and `i2c` groups for /dev/gpiochip* and /dev/i2c-7.
+User=RUNTIME_USER
+Group=RUNTIME_USER
+# The user must also be in the `gpio` and `i2c` groups for /dev/gpiochip* and /dev/i2c-*.
 SupplementaryGroups=gpio i2c
 
-WorkingDirectory=/home/khalifa/kallon
+WorkingDirectory=/opt/kallon
 
-# Per-device secrets and configuration. Created by install-kallon-watchdog.sh.
+# Per-device secrets and configuration. Written by the installer.
 EnvironmentFile=/etc/kallon/device.env
 
-# Orin Nano Super: Jetson.GPIO 2.1.7 does not recognise the "-super" compatible
-# string. This env var tells the library which board it is without patching it.
-Environment=JETSON_MODEL_NAME=JETSON_ORIN_NANO
+# Jetson.GPIO needs to know the board model. The installer auto-detects this
+# from /proc/device-tree/model; override here only if auto-detection fails.
+# Environment=JETSON_MODEL_NAME=JETSON_ORIN_NANO
 
-ExecStart=/usr/bin/python3 /home/khalifa/kallon/kallon_watchdog.py
+ExecStart=/usr/bin/python3 /opt/kallon/kallon_watchdog.py
 
 Restart=on-failure
 RestartSec=3

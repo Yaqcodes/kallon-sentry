@@ -7,6 +7,7 @@ venv/
 .env
 .env.*
 *.pcap
+*.pcapng
 *.log
 .DS_Store
 Thumbs.db
@@ -40,3 +41,6 @@ wg-keys*
 # Local systemd units copied from examples (paths differ per machine)
 deploy/kallon-ptz-daemon.service
 deploy/kallon-watchdog.service
+
+# Factory output from kallon-fulfill-order (contains enrollment tokens)
+fulfillment-output/

@@ -1,0 +1,32 @@
+# First-boot enrollment for the Jetson. Runs kallon-enroll.sh; the script
+# touches /etc/kallon/.enrolled on success so this unit (and every retry via
+# kallon-enroll.timer) becomes an instant no-op after that.
+#
+#   sudo cp deploy/kallon-enroll.service.example /etc/systemd/system/kallon-enroll.service
+#   sudo cp deploy/kallon-enroll.timer.example /etc/systemd/system/kallon-enroll.timer
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable kallon-enroll.service        # runs on next boot
+#   sudo systemctl enable --now kallon-enroll.timer     # retries every few min until enrolled
+#
+# Two layers of retry — no human needs to babysit a flaky first boot:
+#   * within a run: the script retries /v1/enroll internally (MAX_TRIES, backoff)
+#   * across runs: kallon-enroll.timer re-invokes this unit every few minutes
+#     until /etc/kallon/.enrolled exists (handles hub/API being briefly down,
+#     Wi-Fi not associated yet, DHCP not settled, etc.)
+
+[Unit]
+Description=Kallon first-boot enrollment
+After=network-online.target
+Wants=network-online.target
+# Skip entirely once enrolled.
+ConditionPathExists=!/etc/kallon/.enrolled
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Invoke via bash — git tracks scripts 644; do not require +x on kallon-enroll.sh.
+# 75-enroll-service.sh renders this with your repo path; override if copied by hand:
+ExecStart=/usr/bin/bash /opt/kallon/scripts/kallon-enroll.sh --env /etc/kallon/device.env
+
+[Install]
+WantedBy=multi-user.target

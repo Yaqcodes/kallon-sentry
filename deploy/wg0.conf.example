@@ -1,0 +1,31 @@
+# /etc/wireguard/wg0.conf  (mode 0600 root:root)
+#
+# Jetson-side WireGuard template. DO NOT hand-edit in production —
+# scripts/kallon-wg-provision.sh renders this file from /etc/kallon/device.env
+# and the on-device private key. The placeholders below show the exact shape.
+#
+# IMPORTANT: keep annotations on their OWN comment lines (never trailing a
+# directive) — wg-quick does not parse inline comments after a value.
+#
+# On JetPack 6.x (Tegra) the in-tree WG module is absent: wg-quick must use the
+# userspace implementation. Install the drop-in:
+#   deploy/wg-quick-wg0-userspace.conf.example
+#     -> /etc/systemd/system/wg-quick@wg0.service.d/userspace.conf
+#
+# Bring up:  sudo systemctl enable --now wg-quick@wg0
+
+[Interface]
+# Private key read from WG_PRIVATE_KEY_PATH (/etc/wireguard/jetson.private, 600).
+PrivateKey = __JETSON_PRIVATE_KEY__
+# VPN_IP from device.env (/32 allocated by the registry).
+Address = 10.50.0.2/32
+
+[Peer]
+# Customer hub (one per customer org) — GATEWAY_PUBLIC_KEY.
+PublicKey = __GATEWAY_PUBLIC_KEY__
+# GATEWAY_ENDPOINT.
+Endpoint = 203.0.113.42:51820
+# Scope traffic to the customer VPN subnet only — never 0.0.0.0/0 (VPN_SUBNET).
+AllowedIPs = 10.50.0.0/24
+# Keep the tunnel alive through Wi-Fi / LTE NAT.
+PersistentKeepalive = 25

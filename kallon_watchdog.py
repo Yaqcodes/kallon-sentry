@@ -46,6 +46,19 @@ Read from environment (typically set via /etc/kallon/device.env in systemd):
   NVME_DEVICE            default /dev/nvme0
   ENABLE_POWER_ADC       default 0   (no ADC on Orin Nano dev kit)
 
+Optional tower lab dashboard integration (off by default; a normal fleet
+tower is unaffected). See docs/tower-lab-dashboard.md.
+
+  ALERT_WEBHOOK_URL_LOCAL  if set, every alert is ALSO POSTed here (best-effort,
+                           independent of the primary hub delivery). Used to
+                           mirror alerts to a local listener on lab towers.
+  ENABLE_TOWER_DASHBOARD   default 0; when 1, turns the status API on by default.
+  TOWER_STATUS_API_ENABLE  default = ENABLE_TOWER_DASHBOARD; expose GET /status
+                           and GET /healthz on loopback (read-only snapshot of
+                           the watchdog's current in-memory sensor state).
+  TOWER_STATUS_API_HOST    default 127.0.0.1 (loopback only — never the network)
+  TOWER_STATUS_API_PORT    default 8770
+
 CLI overrides match the env names (lowercased, dashes).
 
 Run as a non-root user that is a member of the `gpio` and `i2c` groups.
@@ -145,6 +158,11 @@ class Config:
     enable_nvme: bool
     nvme_device: str
     enable_power_adc: bool
+    # Optional tower lab dashboard integration (off by default).
+    webhook_url_local: str = ""
+    status_api_enable: bool = False
+    status_api_host: str = "127.0.0.1"
+    status_api_port: int = 8770
 
 
 def _env_int(name: str, default: int) -> int:
@@ -180,6 +198,16 @@ def load_config(args: argparse.Namespace) -> Config:
     rtsp_csv = args.rtsp_urls or os.environ.get("RTSP_URLS", "")
     rtsp_urls = [u.strip() for u in rtsp_csv.split(",") if u.strip()]
 
+    # Optional tower lab dashboard hooks. The status API is enabled implicitly
+    # when the dashboard is enabled, or explicitly via TOWER_STATUS_API_ENABLE.
+    dashboard_enabled = _env_bool("ENABLE_TOWER_DASHBOARD", False)
+    status_api_enable = _env_bool("TOWER_STATUS_API_ENABLE", dashboard_enabled)
+    # Mirror alerts to the local listener so the dashboard's alert panel works
+    # out of the box when the dashboard is enabled. Explicit env always wins.
+    webhook_url_local = os.environ.get("ALERT_WEBHOOK_URL_LOCAL", "").strip()
+    if not webhook_url_local and dashboard_enabled:
+        webhook_url_local = "http://127.0.0.1:8080/alerts"
+
     return Config(
         device_id=device_id,
         webhook_url=webhook_url,
@@ -197,7 +225,126 @@ def load_config(args: argparse.Namespace) -> Config:
         enable_nvme=_env_bool("ENABLE_NVME", False),
         nvme_device=os.environ.get("NVME_DEVICE", "/dev/nvme0"),
         enable_power_adc=_env_bool("ENABLE_POWER_ADC", False),
+        webhook_url_local=webhook_url_local,
+        status_api_enable=status_api_enable,
+        status_api_host=os.environ.get("TOWER_STATUS_API_HOST", "127.0.0.1"),
+        status_api_port=_env_int("TOWER_STATUS_API_PORT", 8770),
     )
+
+
+# ---------------------------------------------------------------------------
+# Status store + optional loopback status API (tower lab dashboard)
+# ---------------------------------------------------------------------------
+
+
+class StatusStore:
+    """Thread-safe snapshot of the watchdog's current in-memory sensor state.
+
+    This does NOT add any polling: the probes/handlers push the values they
+    already compute each cycle (or on GPIO edges) into here, and the optional
+    status API just serves the latest snapshot. When the dashboard is off the
+    store is still updated (cheap) but never served.
+    """
+
+    def __init__(self, config: Config) -> None:
+        self._lock = threading.Lock()
+        self._started = time.monotonic()
+        self._data: dict[str, Any] = {
+            "device_id": config.device_id,
+            "poll_interval_sec": config.poll_interval_sec,
+            "mpu_present": False,
+            "door": {"open": None},
+            "light": {"exposed": None},
+            "impact": {
+                "threshold_mg": config.mpu_accel_threshold_mg,
+                "last_delta_mg": None,
+                "last_impact_utc": None,
+            },
+            "temperature": {
+                "celsius": None,
+                "zone": None,
+                "critical": False,
+                "trigger_c": config.temp_trigger_c,
+                "clear_c": config.temp_clear_c,
+            },
+            "disk": {"enabled": config.enable_nvme, "faulted": False},
+            "streams": [],
+        }
+
+    def update(self, key: str, value: Any) -> None:
+        with self._lock:
+            self._data[key] = value
+
+    def merge(self, key: str, patch: dict[str, Any]) -> None:
+        with self._lock:
+            current = self._data.get(key)
+            if isinstance(current, dict):
+                current.update(patch)
+            else:
+                self._data[key] = dict(patch)
+
+    def snapshot(self) -> dict[str, Any]:
+        with self._lock:
+            snap = json.loads(json.dumps(self._data))  # cheap deep copy
+        snap["timestamp_utc"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        snap["uptime_sec"] = round(time.monotonic() - self._started, 1)
+        return snap
+
+
+class StatusServer:
+    """Read-only loopback HTTP server exposing the watchdog status snapshot.
+
+    Stdlib only (mirrors infra/hub/alert_listener.py). GET /status and
+    GET /healthz. Runs in a daemon thread; failures never affect monitoring.
+    """
+
+    def __init__(self, store: StatusStore, host: str, port: int) -> None:
+        self._store = store
+        self._host = host
+        self._port = port
+        self._httpd: Any = None
+        self._thread: Optional[threading.Thread] = None
+
+    def start(self) -> None:
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+        store = self._store
+
+        class Handler(BaseHTTPRequestHandler):
+            server_version = "kallon-watchdog-status/1.0"
+
+            def _reply(self, code: int, payload: dict[str, Any]) -> None:
+                data = json.dumps(payload).encode()
+                self.send_response(code)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+            def do_GET(self) -> None:  # noqa: N802
+                if self.path == "/healthz":
+                    self._reply(200, {"status": "ok"})
+                elif self.path == "/status":
+                    self._reply(200, store.snapshot())
+                else:
+                    self._reply(404, {"error": "not found"})
+
+            def log_message(self, *args: Any) -> None:  # silence access logging
+                pass
+
+        self._httpd = ThreadingHTTPServer((self._host, self._port), Handler)
+        self._thread = threading.Thread(
+            target=self._httpd.serve_forever, name="status-api", daemon=True
+        )
+        self._thread.start()
+        LOG.info("status API listening on %s:%d", self._host, self._port)
+
+    def stop(self) -> None:
+        if self._httpd is not None:
+            try:
+                self._httpd.shutdown()
+            except Exception:  # noqa: BLE001
+                pass
 
 
 # ---------------------------------------------------------------------------
@@ -251,10 +398,12 @@ class AlertSender:
         digest = hmac.new(self.config.alert_key, body, hashlib.sha256).hexdigest()
         return f"sha256={digest}"
 
-    def _post_once(self, body: bytes, signature: str, timeout: float) -> tuple[bool, str]:
+    def _post_once(
+        self, url: str, body: bytes, signature: str, timeout: float
+    ) -> tuple[bool, str]:
         try:
             resp = self._requests.post(
-                self.config.webhook_url,
+                url,
                 data=body,
                 headers={
                     "Content-Type": "application/json",
@@ -268,38 +417,48 @@ class AlertSender:
         except Exception as exc:  # noqa: BLE001
             return False, f"net:{exc.__class__.__name__}"
 
+    def _deliver(
+        self, url: str, label: str, alert_type: str, body: bytes, signature: str, attempts: int
+    ) -> None:
+        backoff = 1.0
+        last_reason = ""
+        for attempt in range(1, attempts + 1):
+            ok, reason = self._post_once(url, body, signature, timeout=5.0)
+            last_reason = reason
+            if ok:
+                LOG.info(
+                    "alert sent dest=%s type=%s attempt=%d status=%s",
+                    label, alert_type, attempt, reason,
+                )
+                return
+            LOG.warning(
+                "alert send failed dest=%s type=%s attempt=%d reason=%s",
+                label, alert_type, attempt, reason,
+            )
+            if attempt < attempts:
+                time.sleep(backoff)
+                backoff *= 2.0
+        LOG.error(
+            "alert dropped dest=%s after %d attempts type=%s last_reason=%s",
+            label, attempts, alert_type, last_reason,
+        )
+
     def _send_with_retry(self, alert: Alert) -> None:
         payload = self._build_payload(alert)
         body = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
         signature = self._sign(body)
+        alert_type = alert.alert_type.value
 
-        backoff = 1.0
-        last_reason = ""
-        for attempt in range(1, 4):  # 3 attempts total
-            ok, reason = self._post_once(body, signature, timeout=5.0)
-            last_reason = reason
-            if ok:
-                LOG.info(
-                    "alert sent type=%s attempt=%d status=%s",
-                    alert.alert_type.value,
-                    attempt,
-                    reason,
-                )
-                return
-            LOG.warning(
-                "alert send failed type=%s attempt=%d reason=%s",
-                alert.alert_type.value,
-                attempt,
-                reason,
+        # Primary hub delivery (unchanged: 3 attempts with backoff).
+        self._deliver(self.config.webhook_url, "hub", alert_type, body, signature, attempts=3)
+
+        # Optional local mirror for the tower lab dashboard. Independent of the
+        # hub result so neither destination can block the other. Loopback, so a
+        # short 2-attempt budget is plenty.
+        if self.config.webhook_url_local:
+            self._deliver(
+                self.config.webhook_url_local, "local", alert_type, body, signature, attempts=2
             )
-            if attempt < 3:
-                time.sleep(backoff)
-                backoff *= 2.0
-        LOG.error(
-            "alert dropped after 3 attempts type=%s last_reason=%s",
-            alert.alert_type.value,
-            last_reason,
-        )
 
     def _run(self) -> None:
         while True:
@@ -386,9 +545,12 @@ class MPU6050:
 class GpioHandlers:
     """Reed switch, LDR, and MPU INT — edge-triggered via Jetson.GPIO."""
 
-    def __init__(self, config: Config, sender: AlertSender) -> None:
+    def __init__(
+        self, config: Config, sender: AlertSender, status: Optional[StatusStore] = None
+    ) -> None:
         self.config = config
         self.sender = sender
+        self.status = status
         # State for recovered alerts. None = not yet known.
         self._door_open: Optional[bool] = None
         self._light_bright: Optional[bool] = None
@@ -411,6 +573,9 @@ class GpioHandlers:
             self._door_open,
             self._light_bright,
         )
+        if self.status is not None:
+            self.status.merge("door", {"open": self._door_open})
+            self.status.merge("light", {"exposed": self._light_bright})
         # If we boot with door open or cover off, fire one alert immediately.
         if self._door_open:
             self.sender.submit(Alert(
@@ -447,12 +612,16 @@ class GpioHandlers:
         is_high = self._gpio.input(channel) == self._gpio.HIGH
         if is_high and self._door_open is not True:
             self._door_open = True
+            if self.status is not None:
+                self.status.merge("door", {"open": True})
             self.sender.submit(Alert(
                 AlertType.TAMPER_DOOR_OPEN,
                 {"gpio_pin": channel, "level": "HIGH"},
             ))
         elif not is_high and self._door_open is not False:
             self._door_open = False
+            if self.status is not None:
+                self.status.merge("door", {"open": False})
             self.sender.submit(Alert(
                 AlertType.TAMPER_DOOR_RECOVERED,
                 {"gpio_pin": channel, "level": "LOW"},
@@ -462,12 +631,16 @@ class GpioHandlers:
         is_low = self._gpio.input(channel) == self._gpio.LOW
         if is_low and self._light_bright is not True:
             self._light_bright = True
+            if self.status is not None:
+                self.status.merge("light", {"exposed": True})
             self.sender.submit(Alert(
                 AlertType.TAMPER_LIGHT,
                 {"gpio_pin": channel, "level": "LOW"},
             ))
         elif not is_low and self._light_bright is not False:
             self._light_bright = False
+            if self.status is not None:
+                self.status.merge("light", {"exposed": False})
             self.sender.submit(Alert(
                 AlertType.TAMPER_LIGHT_RECOVERED,
                 {"gpio_pin": channel, "level": "HIGH"},
@@ -481,10 +654,22 @@ class GpioHandlers:
 
 
 class RtspProbe:
-    def __init__(self, config: Config, sender: AlertSender) -> None:
+    def __init__(
+        self, config: Config, sender: AlertSender, status: Optional[StatusStore] = None
+    ) -> None:
         self.config = config
         self.sender = sender
+        self.status = status
         self._failed: dict[str, bool] = {url: False for url in config.rtsp_urls}
+
+    def _publish(self) -> None:
+        if self.status is None:
+            return
+        streams = [
+            {"path": f"cam{i}", "url": url, "ok": not self._failed.get(url, False)}
+            for i, url in enumerate(self.config.rtsp_urls, start=1)
+        ]
+        self.status.update("streams", streams)
 
     def probe_once(self) -> None:
         for url in self.config.rtsp_urls:
@@ -502,6 +687,7 @@ class RtspProbe:
                     AlertType.CAMERA_STREAM_RECOVERED,
                     {"url": url},
                 ))
+        self._publish()
 
     @staticmethod
     def _ffprobe(url: str) -> tuple[bool, int, str]:
@@ -535,9 +721,12 @@ class RtspProbe:
 
 
 class TemperatureProbe:
-    def __init__(self, config: Config, sender: AlertSender) -> None:
+    def __init__(
+        self, config: Config, sender: AlertSender, status: Optional[StatusStore] = None
+    ) -> None:
         self.config = config
         self.sender = sender
+        self.status = status
         self._in_critical = False
 
     def probe_once(self) -> None:
@@ -557,6 +746,11 @@ class TemperatureProbe:
                 AlertType.TEMP_RECOVERED,
                 {"zone": zone, "celsius": round(celsius, 1), "threshold_c": self.config.temp_clear_c},
             ))
+        if self.status is not None:
+            self.status.merge(
+                "temperature",
+                {"celsius": round(celsius, 1), "zone": zone, "critical": self._in_critical},
+            )
 
     @staticmethod
     def _read_hottest_zone() -> Optional[tuple[str, float]]:
@@ -584,9 +778,12 @@ class TemperatureProbe:
 class NvmeProbe:
     """NVMe SMART check. DISABLED unless ENABLE_NVME=1 and smartctl is present."""
 
-    def __init__(self, config: Config, sender: AlertSender) -> None:
+    def __init__(
+        self, config: Config, sender: AlertSender, status: Optional[StatusStore] = None
+    ) -> None:
         self.config = config
         self.sender = sender
+        self.status = status
         self._faulted = False
 
     def probe_once(self) -> None:
@@ -594,30 +791,67 @@ class NvmeProbe:
         # Enable once an NVMe SSD is fitted: set ENABLE_NVME=1 in /etc/kallon/device.env.
         if not self.config.enable_nvme:
             return
+
+        disk_patch: dict[str, Any] = {
+            "enabled": True,
+            "faulted": self._faulted,
+            "device": self.config.nvme_device,
+        }
+        record_path = os.environ.get("RECORD_PATH", "/var/kallon/recordings")
+        try:
+            du = shutil.disk_usage(record_path)
+            disk_patch.update(
+                {
+                    "mount": record_path,
+                    "space_total_gb": round(du.total / (1024**3), 1),
+                    "space_used_gb": round(du.used / (1024**3), 1),
+                    "space_free_gb": round(du.free / (1024**3), 1),
+                }
+            )
+        except OSError:
+            pass
+
         smartctl = shutil.which("smartctl")
         if not smartctl:
             LOG.warning("ENABLE_NVME=1 but smartctl is not installed; skipping NVMe check.")
+            if self.status is not None:
+                self.status.merge("disk", disk_patch)
             return
         try:
-            proc = subprocess.run(  # noqa: S603
+            data: dict[str, Any] = {}
+            for cmd in (
                 [smartctl, "-A", "-j", self.config.nvme_device],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                timeout=5.0,
-                check=False,
-            )
-            data = json.loads(proc.stdout.decode("utf-8", errors="replace") or "{}")
+                ["sudo", "-n", smartctl, "-A", "-j", self.config.nvme_device],
+            ):
+                proc = subprocess.run(  # noqa: S603
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    timeout=5.0,
+                    check=False,
+                )
+                if proc.returncode not in (0, 4):  # 4 = SMART status flags
+                    continue
+                parsed = json.loads(proc.stdout.decode("utf-8", errors="replace") or "{}")
+                if parsed.get("nvme_smart_health_information_log") or parsed.get("temperature"):
+                    data = parsed
+                    break
+            if not data:
+                raise ValueError("smartctl returned no NVMe health data")
         except Exception as exc:  # noqa: BLE001
             LOG.warning("smartctl failed: %s", exc)
+            if self.status is not None:
+                self.status.merge("disk", disk_patch)
             return
+        smart_log = data.get("nvme_smart_health_information_log", {}) or {}
         # Heuristic: reallocated sectors or critical_warning != 0.
-        warning = (
-            data.get("nvme_smart_health_information_log", {}).get("critical_warning", 0)
+        warning = smart_log.get("critical_warning", 0)
+        media_errors = smart_log.get("media_errors", 0)
+        temp_c = (
+            data.get("temperature", {}).get("current")
+            or smart_log.get("temperature")
+            or 0
         )
-        media_errors = (
-            data.get("nvme_smart_health_information_log", {}).get("media_errors", 0)
-        )
-        temp_c = data.get("temperature", {}).get("current", 0)
         faulted = bool(warning) or media_errors > 0
         if faulted and not self._faulted:
             self._faulted = True
@@ -630,6 +864,14 @@ class NvmeProbe:
                     "smart_temp_c": temp_c,
                 },
             ))
+        disk_patch["faulted"] = self._faulted
+        disk_patch["smart_temp_c"] = temp_c
+        if smart_log.get("percentage_used") is not None:
+            disk_patch["percentage_used"] = smart_log.get("percentage_used")
+        if smart_log.get("available_spare") is not None:
+            disk_patch["available_spare"] = smart_log.get("available_spare")
+        if self.status is not None:
+            self.status.merge("disk", disk_patch)
 
 
 class MotionProbe:
@@ -640,10 +882,17 @@ class MotionProbe:
     polls, fire TAMPER_IMPACT.
     """
 
-    def __init__(self, config: Config, sender: AlertSender, mpu: MPU6050) -> None:
+    def __init__(
+        self,
+        config: Config,
+        sender: AlertSender,
+        mpu: MPU6050,
+        status: Optional[StatusStore] = None,
+    ) -> None:
         self.config = config
         self.sender = sender
         self.mpu = mpu
+        self.status = status
         self._prev: Optional[tuple[float, float, float]] = None
 
     def probe_once(self) -> None:
@@ -665,11 +914,22 @@ class MotionProbe:
                 x, y, z, self._prev[0], self._prev[1], self._prev[2],
                 delta_mg, threshold,
             )
+            if self.status is not None:
+                self.status.merge("impact", {"last_delta_mg": round(delta_mg, 1)})
             if delta_mg >= threshold:
                 LOG.info(
                     "TAMPER_IMPACT triggered delta_mg=%.1f threshold=%.1f",
                     delta_mg, threshold,
                 )
+                if self.status is not None:
+                    self.status.merge(
+                        "impact",
+                        {
+                            "last_impact_utc": datetime.now(timezone.utc).strftime(
+                                "%Y-%m-%dT%H:%M:%SZ"
+                            )
+                        },
+                    )
                 self.sender.submit(Alert(
                     AlertType.TAMPER_IMPACT,
                     {
@@ -722,6 +982,19 @@ def main(argv: Optional[list[str]] = None) -> int:
         len(config.rtsp_urls),
     )
 
+    status = StatusStore(config)
+    status_server: Optional[StatusServer] = None
+    if config.status_api_enable:
+        try:
+            status_server = StatusServer(
+                status, config.status_api_host, config.status_api_port
+            )
+            status_server.start()
+        except Exception as exc:  # noqa: BLE001
+            # Never let the optional dashboard surface take down monitoring.
+            LOG.error("status API failed to start (continuing without it): %s", exc)
+            status_server = None
+
     sender = AlertSender(config)
     sender.start()
 
@@ -740,21 +1013,28 @@ def main(argv: Optional[list[str]] = None) -> int:
     except Exception as exc:  # noqa: BLE001
         LOG.error("MPU-6050 init failed; impact alerts disabled: %s", exc)
         mpu = None
+    status.update("mpu_present", mpu is not None)
 
-    gpio_handlers = GpioHandlers(config, sender)
+    # GPIO (door/cover tamper) is best-effort. If Jetson.GPIO can't load or the
+    # board model isn't recognised, disable those alerts but keep the rest of the
+    # daemon (RTSP, temperature, MPU motion, and the status API) running rather
+    # than crash-looping and taking down all monitoring. Set JETSON_MODEL_NAME in
+    # device.env to a Jetson.GPIO-recognised name if init keeps failing.
+    gpio_handlers: Optional[GpioHandlers] = None
     try:
+        gpio_handlers = GpioHandlers(config, sender, status)
         gpio_handlers.setup()
     except Exception:
-        LOG.exception("GPIO setup failed")
-        sender.stop()
-        return 1
+        LOG.exception("GPIO init failed; door/cover tamper alerts disabled (other monitoring continues)")
+        gpio_handlers = None
+    status.update("gpio_present", gpio_handlers is not None)
 
-    rtsp_probe = RtspProbe(config, sender)
-    temp_probe = TemperatureProbe(config, sender)
-    nvme_probe = NvmeProbe(config, sender)
+    rtsp_probe = RtspProbe(config, sender, status)
+    temp_probe = TemperatureProbe(config, sender, status)
+    nvme_probe = NvmeProbe(config, sender, status)
     motion_probe: Optional[MotionProbe] = None
     if mpu is not None:
-        motion_probe = MotionProbe(config, sender, mpu)
+        motion_probe = MotionProbe(config, sender, mpu, status)
 
     stop_event = threading.Event()
 
@@ -767,8 +1047,11 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     if args.dry_run:
         LOG.info("dry-run complete; exiting before poll loop.")
-        gpio_handlers.teardown()
+        if gpio_handlers is not None:
+            gpio_handlers.teardown()
         sender.stop()
+        if status_server is not None:
+            status_server.stop()
         if mpu is not None:
             mpu.close()
         return 0
@@ -790,8 +1073,11 @@ def main(argv: Optional[list[str]] = None) -> int:
                     LOG.exception("probe %s crashed; continuing", probe_name)
             stop_event.wait(config.poll_interval_sec)
     finally:
-        gpio_handlers.teardown()
+        if gpio_handlers is not None:
+            gpio_handlers.teardown()
         sender.stop()
+        if status_server is not None:
+            status_server.stop()
         if mpu is not None:
             mpu.close()
 
