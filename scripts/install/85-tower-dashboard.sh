@@ -111,6 +111,7 @@ Group=${RUNTIME_USER}
 EnvironmentFile=$KALLON_ENV
 Environment=MJPEG_BIND=127.0.0.1
 Environment=MJPEG_PORT=${MJPEG_PORT}
+Environment=MJPEG_DECODER=h264_nvv4l2dec
 ExecStart=/usr/bin/python3 $DASH_DIR/mjpeg_proxy.py
 Restart=on-failure
 RestartSec=5

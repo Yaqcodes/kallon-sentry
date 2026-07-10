@@ -18,7 +18,8 @@ Environment (all optional):
   MJPEG_FPS          output fps          (default: 15)
   MJPEG_QUALITY      ffmpeg -q:v 1-31, lower=better  (default: 8)
   MJPEG_SCALE        ffmpeg scale filter (default: 1280:-2)
-  MJPEG_HWACCEL      ffmpeg -hwaccel arg (default: nvv4l2dec; empty to disable)
+  MJPEG_DECODER      ffmpeg input decoder (default: h264_nvv4l2dec on aarch64; empty=software)
+  MJPEG_HWACCEL      deprecated alias — if set to nvv4l2dec, maps to h264_nvv4l2dec
   MJPEG_READY_POLL   seconds between mediamtx readiness checks (default: 5)
   MJPEG_IDLE_BACKOFF seconds to sleep after ffmpeg exit when path offline (default: 5)
 
@@ -55,7 +56,25 @@ MEDIAMTX_API = os.environ.get("MEDIAMTX_API", "http://127.0.0.1:9997").rstrip("/
 MJPEG_FPS  = int(os.environ.get("MJPEG_FPS", "15"))
 MJPEG_Q    = int(os.environ.get("MJPEG_QUALITY", "8"))
 MJPEG_SCALE = os.environ.get("MJPEG_SCALE", "1280:-2")
-HWACCEL    = os.environ.get("MJPEG_HWACCEL", "nvv4l2dec")
+
+
+def _resolve_decoder() -> str:
+    """Jetson ffmpeg uses -c:v h264_nvv4l2dec, not -hwaccel nvv4l2dec."""
+    if "MJPEG_DECODER" in os.environ:
+        return os.environ.get("MJPEG_DECODER", "").strip()
+    legacy = os.environ.get("MJPEG_HWACCEL", "").strip()
+    if legacy in ("", "0", "no", "false"):
+        pass
+    elif legacy == "nvv4l2dec":
+        return "h264_nvv4l2dec"
+    else:
+        return legacy
+    if os.uname().machine in ("aarch64", "arm64"):
+        return "h264_nvv4l2dec"
+    return ""
+
+
+DECODER = _resolve_decoder()
 READY_POLL = float(os.environ.get("MJPEG_READY_POLL", "5"))
 IDLE_BACKOFF = float(os.environ.get("MJPEG_IDLE_BACKOFF", "5"))
 
@@ -137,8 +156,8 @@ class FrameBroadcaster:
     def _build_cmd(self) -> list[str]:
         vf = f"scale={MJPEG_SCALE},fps={MJPEG_FPS}" if MJPEG_SCALE else f"fps={MJPEG_FPS}"
         cmd = ["ffmpeg", "-loglevel", "error", "-rtsp_transport", "tcp"]
-        if HWACCEL:
-            cmd += ["-hwaccel", HWACCEL]
+        if DECODER:
+            cmd += ["-c:v", DECODER]
         cmd += [
             "-i", self.url,
             "-vf", vf,
@@ -295,7 +314,7 @@ class _ThreadingHTTPServer(http.server.ThreadingHTTPServer):
 def main() -> None:
     for path in CAMERA_PATHS:
         _broadcasters[path] = FrameBroadcaster(path)
-    log.info("broadcasters for: %s (poll=%.0fs, fps=%d)", ", ".join(CAMERA_PATHS), READY_POLL, MJPEG_FPS)
+    log.info("broadcasters for: %s (poll=%.0fs, fps=%d, decoder=%s)", ", ".join(CAMERA_PATHS), READY_POLL, MJPEG_FPS, DECODER or "software")
 
     srv = _ThreadingHTTPServer((BIND_HOST, MJPEG_PORT), MjpegHandler)
     log.info("listening on %s:%d", BIND_HOST, MJPEG_PORT)
