@@ -27,6 +27,7 @@ Endpoints
   GET  /api/events            -> Server-Sent Events stream of alerts
   POST /ingest/alerts         -> receive a forwarded alert (from alert_listener)
   POST /api/ptz               -> relay one command to the PTZ daemon
+  POST /api/snapshot          -> grab one JPEG frame to disk (ffmpeg via loopback RTSP)
 
 Environment
 -----------
@@ -38,6 +39,8 @@ Environment
   WATCHDOG_STATUS_URL  default http://127.0.0.1:8770
   PTZ_HOST             default 127.0.0.1
   PTZ_PORT             default 8765
+  RTSP_BASE            default rtsp://127.0.0.1:8554
+  SNAPSHOT_PATH        default ~/Pictures/Sentinel
   ALERT_HISTORY        default 200         (in-memory ring buffer size)
   CAMERA_IPS           from device.env (comma-separated) -> camera count
   DEVICE_ID            from device.env
@@ -49,6 +52,7 @@ import logging
 import os
 import queue
 import socket
+import subprocess
 import threading
 import urllib.request
 from datetime import datetime, timezone
@@ -68,6 +72,8 @@ MJPEG_PROXY  = os.environ.get("MJPEG_PROXY",  "http://127.0.0.1:8889").rstrip("/
 WATCHDOG_STATUS_URL = os.environ.get("WATCHDOG_STATUS_URL", "http://127.0.0.1:8770").rstrip("/")
 PTZ_HOST = os.environ.get("PTZ_HOST", "127.0.0.1")
 PTZ_PORT = int(os.environ.get("PTZ_PORT", "8765"))
+RTSP_BASE = os.environ.get("RTSP_BASE", "rtsp://127.0.0.1:8554").rstrip("/")
+SNAPSHOT_PATH = Path(os.environ.get("SNAPSHOT_PATH", str(Path.home() / "Pictures" / "Sentinel")))
 ALERT_HISTORY = int(os.environ.get("ALERT_HISTORY", "200"))
 
 PTZ_METHODS = {
@@ -205,6 +211,9 @@ def ptz_command(payload: dict[str, Any]) -> dict[str, Any]:
     # Allow a top-level "camera" for convenience; fold it into params.
     if "camera" in payload and "camera" not in params:
         params["camera"] = payload["camera"]
+    cam = params.get("camera")
+    if isinstance(cam, float) and cam.is_integer():
+        params["camera"] = int(cam)
     request_line = json.dumps({"id": 1, "method": method, "params": params}) + "\n"
     try:
         with socket.create_connection((PTZ_HOST, PTZ_PORT), timeout=10.0) as sock:
@@ -225,6 +234,52 @@ def ptz_command(payload: dict[str, Any]) -> dict[str, Any]:
         return json.loads(line)
     except json.JSONDecodeError as exc:
         return {"ok": False, "error": {"code": "PTZ_BAD_JSON", "message": str(exc)}}
+
+
+def _resolve_camera_num(raw: Any) -> Optional[int]:
+    if isinstance(raw, bool):
+        return None
+    if isinstance(raw, int) and raw >= 1:
+        return raw
+    if isinstance(raw, float) and raw.is_integer() and raw >= 1:
+        return int(raw)
+    if isinstance(raw, str) and raw.isdigit() and int(raw) >= 1:
+        return int(raw)
+    return None
+
+
+def snapshot_camera(camera: int) -> dict[str, Any]:
+    """Grab one JPEG from the local mediamtx rebroadcast and write to SNAPSHOT_PATH."""
+    path_name = f"cam{camera}"
+    try:
+        data = _http_get_json(f"{MEDIAMTX_API}/v3/paths/get/{path_name}", timeout=2.0)
+        if not data.get("ready"):
+            return {"ok": False, "error": {"code": "OFFLINE", "message": f"{path_name} is not ready"}}
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": {"code": "MEDIAMTX", "message": str(exc)}}
+
+    dest_dir = SNAPSHOT_PATH
+    try:
+        dest_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        return {"ok": False, "error": {"code": "MKDIR", "message": str(exc)}}
+
+    ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    filename = f"{path_name}_{ts}.jpg"
+    dest = dest_dir / filename
+    rtsp = f"{RTSP_BASE}/{path_name}"
+    cmd = [
+        "ffmpeg", "-y", "-loglevel", "error", "-rtsp_transport", "tcp",
+        "-i", rtsp, "-frames:v", "1", "-q:v", "2", str(dest),
+    ]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=12.0, check=False)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return {"ok": False, "error": {"code": "FFMPEG", "message": str(exc)}}
+    if proc.returncode != 0 or not dest.is_file():
+        err = (proc.stderr or proc.stdout or "ffmpeg failed").strip()
+        return {"ok": False, "error": {"code": "CAPTURE", "message": err}}
+    return {"ok": True, "path": str(dest), "filename": filename}
 
 
 # ---------------------------------------------------------------------------
@@ -287,6 +342,8 @@ class Handler(BaseHTTPRequestHandler):
             self._ingest()
         elif path == "/api/ptz":
             self._ptz()
+        elif path == "/api/snapshot":
+            self._snapshot()
         else:
             self._json(404, {"error": "not found"})
 
@@ -339,6 +396,21 @@ class Handler(BaseHTTPRequestHandler):
             self._json(400, {"error": "body must be an object"})
             return
         self._json(200, ptz_command(payload))
+
+    def _snapshot(self) -> None:
+        try:
+            payload = json.loads(self._read_body() or b"{}")
+        except json.JSONDecodeError:
+            self._json(400, {"ok": False, "error": {"code": "BAD_JSON", "message": "invalid json"}})
+            return
+        if not isinstance(payload, dict):
+            self._json(400, {"ok": False, "error": {"code": "BAD_BODY", "message": "body must be an object"}})
+            return
+        camera = _resolve_camera_num(payload.get("camera"))
+        if camera is None:
+            self._json(400, {"ok": False, "error": {"code": "BAD_CAMERA", "message": "camera must be a positive integer"}})
+            return
+        self._json(200, snapshot_camera(camera))
 
     def _events(self) -> None:
         self.send_response(200)

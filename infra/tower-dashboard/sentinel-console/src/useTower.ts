@@ -1,14 +1,16 @@
 import { useEffect, useRef, useState } from 'react';
 import type { AlertEvent, AlertLevel } from './types';
 import {
-  getConfig, getStatus, getStreams,
   type ConfigResponse, type GwAlert, type StatusResponse, type StreamsResponse,
 } from './api';
 
 const STREAMS_POLL_MS = 3000;
+const STREAMS_POLL_HIDDEN_MS = 8000;
 const STATUS_POLL_MS = 2000;
+const STATUS_POLL_HIDDEN_MS = 6000;
 const CONFIG_RETRY_MS = 4000;
 const MAX_ALERTS = 200;
+const FETCH_TIMEOUT_MS = 8000;
 
 function severityLevel(sev: string): AlertLevel {
   const s = (sev || '').toLowerCase();
@@ -36,6 +38,18 @@ function toAlertEvent(a: GwAlert, key: string): AlertEvent {
   };
 }
 
+async function fetchJSON<T>(url: string): Promise<T> {
+  const ac = new AbortController();
+  const timer = window.setTimeout(() => ac.abort(), FETCH_TIMEOUT_MS);
+  try {
+    const r = await fetch(url, { headers: { Accept: 'application/json' }, signal: ac.signal });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    return (await r.json()) as T;
+  } finally {
+    window.clearTimeout(timer);
+  }
+}
+
 export interface TowerData {
   config: ConfigResponse | null;
   streams: StreamsResponse | null;
@@ -56,7 +70,14 @@ export function useTower(): TowerData {
   const [status, setStatus] = useState<StatusResponse | null>(null);
   const [alerts, setAlerts] = useState<AlertEvent[]>([]);
   const [connected, setConnected] = useState(false);
+  const [visible, setVisible] = useState(() => document.visibilityState !== 'hidden');
   const seen = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    const onVis = () => setVisible(document.visibilityState !== 'hidden');
+    document.addEventListener('visibilitychange', onVis);
+    return () => document.removeEventListener('visibilitychange', onVis);
+  }, []);
 
   // config: load once, retry until the gateway answers
   useEffect(() => {
@@ -64,7 +85,7 @@ export function useTower(): TowerData {
     let timer: number | undefined;
     const load = async () => {
       try {
-        const cfg = await getConfig();
+        const cfg = await fetchJSON<ConfigResponse>('/api/config');
         if (!cancelled) setConfig(cfg);
       } catch {
         if (!cancelled) timer = window.setTimeout(load, CONFIG_RETRY_MS);
@@ -77,25 +98,29 @@ export function useTower(): TowerData {
   // stream readiness poll
   useEffect(() => {
     let cancelled = false;
+    let timer: number | undefined;
+    const interval = visible ? STREAMS_POLL_MS : STREAMS_POLL_HIDDEN_MS;
     const tick = async () => {
       try {
-        const data = await getStreams();
+        const data = await fetchJSON<StreamsResponse>('/api/streams');
         if (!cancelled) setStreams(data);
       } catch {
-        if (!cancelled) setStreams({ available: false, paths: [] });
+        if (!cancelled) setStreams((prev) => prev ?? { available: false, paths: [] });
       }
+      if (!cancelled) timer = window.setTimeout(tick, interval);
     };
     tick();
-    const id = window.setInterval(tick, STREAMS_POLL_MS);
-    return () => { cancelled = true; window.clearInterval(id); };
-  }, []);
+    return () => { cancelled = true; if (timer) window.clearTimeout(timer); };
+  }, [visible]);
 
   // health status poll (also drives the connection indicator)
   useEffect(() => {
     let cancelled = false;
+    let timer: number | undefined;
+    const interval = visible ? STATUS_POLL_MS : STATUS_POLL_HIDDEN_MS;
     const tick = async () => {
       try {
-        const data = await getStatus();
+        const data = await fetchJSON<StatusResponse>('/api/status');
         if (cancelled) return;
         setStatus(data);
         setConnected(true);
@@ -104,28 +129,45 @@ export function useTower(): TowerData {
         setStatus({ available: false });
         setConnected(false);
       }
+      if (!cancelled) timer = window.setTimeout(tick, interval);
     };
     tick();
-    const id = window.setInterval(tick, STATUS_POLL_MS);
-    return () => { cancelled = true; window.clearInterval(id); };
-  }, []);
+    return () => { cancelled = true; if (timer) window.clearTimeout(timer); };
+  }, [visible]);
 
-  // live alerts via Server-Sent Events (auto-reconnecting)
+  // live alerts via Server-Sent Events (explicit reconnect on drop)
   useEffect(() => {
-    const es = new EventSource('/api/events');
-    es.onmessage = (ev) => {
-      try {
-        const raw = JSON.parse(ev.data) as GwAlert;
-        const key = alertKey(raw);
-        if (seen.current.has(key)) return;
-        seen.current.add(key);
-        if (seen.current.size > 500) {
-          seen.current = new Set(Array.from(seen.current).slice(-300));
-        }
-        setAlerts((prev) => [toAlertEvent(raw, key), ...prev].slice(0, MAX_ALERTS));
-      } catch { /* ignore malformed frame */ }
+    let cancelled = false;
+    let es: EventSource | undefined;
+    let retry: number | undefined;
+
+    const connect = () => {
+      if (cancelled) return;
+      es = new EventSource('/api/events');
+      es.onmessage = (ev) => {
+        try {
+          const raw = JSON.parse(ev.data) as GwAlert;
+          const key = alertKey(raw);
+          if (seen.current.has(key)) return;
+          seen.current.add(key);
+          if (seen.current.size > 500) {
+            seen.current = new Set(Array.from(seen.current).slice(-300));
+          }
+          setAlerts((prev) => [toAlertEvent(raw, key), ...prev].slice(0, MAX_ALERTS));
+        } catch { /* ignore malformed frame */ }
+      };
+      es.onerror = () => {
+        es?.close();
+        if (!cancelled) retry = window.setTimeout(connect, 3000);
+      };
     };
-    return () => es.close();
+
+    connect();
+    return () => {
+      cancelled = true;
+      if (retry) window.clearTimeout(retry);
+      es?.close();
+    };
   }, []);
 
   return { config, streams, status, alerts, connected };

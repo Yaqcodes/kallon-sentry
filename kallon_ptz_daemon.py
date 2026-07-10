@@ -60,7 +60,6 @@ from dahua_onvif_control import (
     DEFAULT_REQUEST_TIMEOUT_SEC,
     DEFAULT_USER,
     connect,
-    profile_token,
     resolve_password,
     resolve_wsdl_dir,
 )
@@ -135,23 +134,40 @@ class CameraPool:
             )
         session = self._sessions.get(index)
         if session is None:
-            cam = connect(
-                spec.host,
-                spec.onvif_port,
-                spec.user,
-                spec.password,
-                self._timeout,
-                self._wsdl_dir,
-            )
-            session = PTZSession(cam, self._default_profile)
+            session = self._open_session(spec)
             self._sessions[index] = session
-            LOG.info(
-                "opened ONVIF session camera=%d host=%s:%d",
-                index,
-                spec.host,
-                spec.onvif_port,
-            )
         return session
+
+    def _open_session(self, spec: CameraSpec) -> PTZSession:
+        cam = connect(
+            spec.host,
+            spec.onvif_port,
+            spec.user,
+            spec.password,
+            self._timeout,
+            self._wsdl_dir,
+        )
+        profile = self._first_ptz_profile(cam)
+        LOG.info(
+            "opened ONVIF session camera=%d host=%s:%d profile=%d",
+            spec.index,
+            spec.host,
+            spec.onvif_port,
+            profile,
+        )
+        return PTZSession(cam, profile)
+
+    def invalidate(self, index: int) -> None:
+        self._sessions.pop(index, None)
+
+    @staticmethod
+    def _first_ptz_profile(cam: Any) -> int:
+        """Pick the first media profile that actually has PTZ configured."""
+        media = cam.create_media_service()
+        for i, prof in enumerate(media.GetProfiles()):
+            if prof.PTZConfiguration is not None:
+                return i
+        return 0
 
 
 def _profile(params: dict[str, Any], session: PTZSession) -> int:
@@ -163,11 +179,7 @@ def _profile(params: dict[str, Any], session: PTZSession) -> int:
 
 def _continuous_move(cam: Any, profile_index: int, pan: float, tilt: float, zoom: float, seconds: float) -> None:
     ptz = _ptz_service(cam)
-    media = cam.create_media_service()
-    token = profile_token(cam, profile_index)
-    profile = next(p for p in media.GetProfiles() if p.token == token)
-    if profile.PTZConfiguration is None:
-        raise RuntimeError("This profile has no PTZ")
+    token = _require_ptz_profile(cam, profile_index)
 
     move = ptz.create_type("ContinuousMove")
     move.ProfileToken = token
@@ -183,7 +195,7 @@ def _continuous_move(cam: Any, profile_index: int, pan: float, tilt: float, zoom
 
 def _ptz_stop(cam: Any, profile_index: int) -> None:
     ptz = _ptz_service(cam)
-    token = profile_token(cam, profile_index)
+    token = _require_ptz_profile(cam, profile_index)
     stop = ptz.create_type("Stop")
     stop.ProfileToken = token
     stop.PanTilt = True
@@ -193,15 +205,29 @@ def _ptz_stop(cam: Any, profile_index: int) -> None:
 
 def _ptz_home(cam: Any, profile_index: int) -> None:
     ptz = _ptz_service(cam)
-    token = profile_token(cam, profile_index)
-    req = ptz.create_type("GotoHomePosition")
-    req.ProfileToken = token
-    req.Speed = None
-    ptz.GotoHomePosition(req)
+    token = _require_ptz_profile(cam, profile_index)
+    try:
+        req = ptz.create_type("GotoHomePosition")
+        req.ProfileToken = token
+        req.Speed = None
+        ptz.GotoHomePosition(req)
+        return
+    except Exception as exc:
+        LOG.warning("GotoHomePosition failed (%s); falling back to absolute centre", exc)
+    # Dahua cameras often lack a configured ONVIF home — snap to centre instead.
+    move = ptz.create_type("AbsoluteMove")
+    move.ProfileToken = token
+    move.Position = {"PanTilt": {"x": 0.0, "y": 0.0}, "Zoom": {"x": 0.0}}
+    move.Speed = {"PanTilt": {"x": 0.5, "y": 0.5}, "Zoom": {"x": 0.5}}
+    ptz.AbsoluteMove(move)
 
 
 def _resolve_camera_index(params: dict[str, Any]) -> int:
     v = params.get("camera", 1)
+    if isinstance(v, str) and v.isdigit():
+        v = int(v)
+    if isinstance(v, float) and v.is_integer():
+        v = int(v)
     if not isinstance(v, int) or isinstance(v, bool) or v < 1:
         raise ValueError("camera must be a positive integer (1-based)")
     return v
@@ -214,8 +240,17 @@ def dispatch(pool: CameraPool, method: str, params: dict[str, Any]) -> dict[str,
     if method == "list_cameras":
         return {"cameras": pool.describe()}
 
-    session = pool.get(_resolve_camera_index(params))
+    cam_index = _resolve_camera_index(params)
+    session = pool.get(cam_index)
 
+    try:
+        return _dispatch_ptz(pool, session, method, params)
+    except Exception:
+        pool.invalidate(cam_index)
+        raise
+
+
+def _dispatch_ptz(pool: CameraPool, session: PTZSession, method: str, params: dict[str, Any]) -> dict[str, Any]:
     if method == "status":
         idx = _profile(params, session)
         ptz = _ptz_service(session.cam)

@@ -12,7 +12,7 @@ interface Props {
   thumb: boolean;
   onSelect: () => void;
   onToggleSpotlight: () => void;
-  onSnapshot: () => void;
+  onSnapshot: () => Promise<string | null>;
 }
 
 const pad3 = (n: number) => String(((Math.round(n) % 360) + 360) % 360).padStart(3, '0');
@@ -28,7 +28,9 @@ export default function TowerFeed({
   camera, selected, accent, spotlighted, thumb, onSelect, onToggleSpotlight, onSnapshot,
 }: Props) {
   const [flash, setFlash] = useState(false);
+  const [saveNote, setSaveNote] = useState<string | null>(null);
   const hasSource = !!(camera.mjpegUrl || camera.hlsUrl);
+  const streamReady = camera.status === 'ONLINE';
 
   const statusColor =
     camera.status === 'ONLINE' ? accent : camera.status === 'STANDBY' ? colors.standby : colors.offline;
@@ -38,7 +40,12 @@ export default function TowerFeed({
   const snapshot = () => {
     setFlash(true);
     window.setTimeout(() => setFlash(false), 380);
-    onSnapshot();
+    onSnapshot().then((path) => {
+      if (path) {
+        setSaveNote(`Saved to ${path}`);
+        window.setTimeout(() => setSaveNote(null), 4500);
+      }
+    });
   };
 
   const feedClass = `feed${selected ? ' selected' : ''}${spotlighted ? ' is-spotlight' : ''}${thumb ? ' is-thumb' : ''}`;
@@ -62,7 +69,7 @@ export default function TowerFeed({
       )}
 
       {/* live video */}
-      {hasSource && <CameraVideo mjpegUrl={camera.mjpegUrl} hlsUrl={camera.hlsUrl} />}
+      {hasSource && <CameraVideo mjpegUrl={camera.mjpegUrl} hlsUrl={camera.hlsUrl} streamReady={streamReady} />}
 
       {/* corner brackets */}
       <div style={{ ...bracketBase, top: 10, left: 10, borderTop: `2px solid ${bracket}`, borderLeft: `2px solid ${bracket}` }} />
@@ -110,6 +117,7 @@ export default function TowerFeed({
       </div>
 
       {flash && <div className="snap-flash" style={{ position: 'absolute', inset: 0, background: '#eef3f7', pointerEvents: 'none' }} />}
+      {saveNote && <div className="snap-toast">{saveNote}</div>}
 
       {selected && <div style={{ position: 'absolute', inset: 0, border: `1.5px solid ${accent}`, pointerEvents: 'none' }} />}
 

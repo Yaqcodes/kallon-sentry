@@ -4,7 +4,7 @@ import type { Camera, CameraStatus } from '../types';
 import { colors, font } from '../tokens';
 import { health, levelColor } from '../util';
 import { buildSensors } from '../sensors';
-import { ptz } from '../api';
+import { ptz, snapshot } from '../api';
 import { useTower } from '../useTower';
 import TowerFeed from './TowerFeed';
 import PtzPad, { type PanDir } from './PtzPad';
@@ -114,6 +114,16 @@ export default function SentinelConsole() {
     if (selectedCam) bumpEstimate(selectedCam.id, (e) => ({ ...e, zoom: clamp(Number((e.zoom + d).toFixed(1)), 1.0, 8.0) }));
   }, [selectedCam, camNum, bumpEstimate, feedback]);
 
+  const captureSnapshot = useCallback(async (camId: string) => {
+    const cam = camNum(camId);
+    const res = await snapshot(cam);
+    if (!res.ok) {
+      setPtzMsg(`snapshot failed: ${res.error?.message ?? 'error'}`);
+      return null;
+    }
+    return res.path ?? null;
+  }, [camNum]);
+
   const recenter = useCallback(() => {
     const cam = camNum(selectedCam?.id ?? '01');
     ptz('home', { camera: cam }).then((r) => feedback(r, 'home'));
@@ -215,7 +225,7 @@ export default function SentinelConsole() {
               thumb={spotlight && c.id !== selectedCam?.id}
               onSelect={() => setSelectedCamId(c.id)}
               onToggleSpotlight={() => setSpotlight((v) => !v)}
-              onSnapshot={() => { /* client-only capture flash; RTSP frames are cross-origin */ }}
+              onSnapshot={() => captureSnapshot(c.id)}
             />
           ))}
         </section>

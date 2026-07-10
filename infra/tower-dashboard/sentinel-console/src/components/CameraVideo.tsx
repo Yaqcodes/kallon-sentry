@@ -4,18 +4,22 @@ import Hls from 'hls.js';
 interface Props {
   mjpegUrl?: string;
   hlsUrl?: string;
+  /** mediamtx path readiness — when false, don't spin ffmpeg retries */
+  streamReady?: boolean;
 }
 
 type Mode = 'mjpeg' | 'hls' | 'none';
 
 const MJPEG_MAX_ERRORS = 3;
+const STALL_MS = 18_000;
+const STALL_CHECK_MS = 4_000;
 
 /**
  * Live camera video for one tile. Prefers the low-latency MJPEG proxy; if it
  * cannot connect (or is not configured) it falls back to HLS via hls.js —
  * mirroring the behaviour of the previous vanilla dashboard.
  */
-export default function CameraVideo({ mjpegUrl, hlsUrl }: Props) {
+export default function CameraVideo({ mjpegUrl, hlsUrl, streamReady = true }: Props) {
   const initialMode: Mode = mjpegUrl ? 'mjpeg' : hlsUrl ? 'hls' : 'none';
   const [mode, setMode] = useState<Mode>(initialMode);
   const [note, setNote] = useState<string>('connecting…');
@@ -25,22 +29,46 @@ export default function CameraVideo({ mjpegUrl, hlsUrl }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const mjpegErrors = useRef(0);
   const retryTimer = useRef<number | undefined>(undefined);
+  const lastFrameAt = useRef(0);
 
   // Reset when the source changes (e.g. config (re)loaded).
   useEffect(() => {
     mjpegErrors.current = 0;
+    lastFrameAt.current = 0;
     setPlaying(false);
     setNote('connecting…');
     setMode(mjpegUrl ? 'mjpeg' : hlsUrl ? 'hls' : 'none');
   }, [mjpegUrl, hlsUrl]);
 
+  // MJPEG stall watchdog: frozen <img> streams often never fire error.
+  useEffect(() => {
+    if (mode !== 'mjpeg' || !mjpegUrl || !streamReady) return;
+    const id = window.setInterval(() => {
+      const img = imgRef.current;
+      if (!img || !playing) return;
+      const age = Date.now() - lastFrameAt.current;
+      if (lastFrameAt.current > 0 && age > STALL_MS) {
+        setNote('recovering stream…');
+        img.src = `${mjpegUrl}?t=${Date.now()}`;
+        lastFrameAt.current = Date.now();
+      }
+    }, STALL_CHECK_MS);
+    return () => window.clearInterval(id);
+  }, [mode, mjpegUrl, streamReady, playing]);
+
   // MJPEG: <img> streaming multipart; retry with cache-bust, fall back to HLS.
   useEffect(() => {
     if (mode !== 'mjpeg' || !mjpegUrl) return;
+    if (!streamReady) {
+      setPlaying(false);
+      setNote('camera offline');
+      if (imgRef.current) imgRef.current.removeAttribute('src');
+      return;
+    }
     const img = imgRef.current;
     if (!img) return;
 
-    const onLoad = () => { mjpegErrors.current = 0; setPlaying(true); setNote(''); };
+    const onLoad = () => { mjpegErrors.current = 0; lastFrameAt.current = Date.now(); setPlaying(true); setNote(''); };
     const onError = () => {
       setPlaying(false);
       mjpegErrors.current += 1;
@@ -63,7 +91,7 @@ export default function CameraVideo({ mjpegUrl, hlsUrl }: Props) {
       img.removeEventListener('error', onError);
       if (retryTimer.current) window.clearTimeout(retryTimer.current);
     };
-  }, [mode, mjpegUrl, hlsUrl]);
+  }, [mode, mjpegUrl, hlsUrl, streamReady]);
 
   // HLS: hls.js where supported, native HLS on Safari/iOS.
   useEffect(() => {
@@ -114,7 +142,7 @@ export default function CameraVideo({ mjpegUrl, hlsUrl }: Props) {
 
   return (
     <div className="cam-video-wrap">
-      {mode === 'mjpeg' && <img ref={imgRef} className="cam-video" alt="" />}
+      {mode === 'mjpeg' && <img ref={imgRef} className="cam-video" alt="" decoding="async" />}
       {mode === 'hls' && <video ref={videoRef} className="cam-video" muted playsInline autoPlay />}
       {(!playing || mode === 'none') && (
         <div className="cam-note">{mode === 'none' ? 'no stream configured' : note}</div>

@@ -83,6 +83,13 @@ export interface PtzResult {
   [k: string]: unknown;
 }
 
+export interface SnapshotResult {
+  ok: boolean;
+  path?: string;
+  filename?: string;
+  error?: { code?: string; message?: string };
+}
+
 async function getJSON<T>(url: string): Promise<T> {
   const r = await fetch(url, { headers: { Accept: 'application/json' } });
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
@@ -102,6 +109,20 @@ export async function ptz(method: string, params: Record<string, unknown>): Prom
       body: JSON.stringify({ method, params }),
     });
     return (await r.json()) as PtzResult;
+  } catch (e) {
+    return { ok: false, error: { code: 'GATEWAY', message: String(e) } };
+  }
+}
+
+/** Grab one JPEG from the local rebroadcast; saved server-side by the gateway. */
+export async function snapshot(camera: number): Promise<SnapshotResult> {
+  try {
+    const r = await fetch('/api/snapshot', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ camera }),
+    });
+    return (await r.json()) as SnapshotResult;
   } catch (e) {
     return { ok: false, error: { code: 'GATEWAY', message: String(e) } };
   }

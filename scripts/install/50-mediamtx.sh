@@ -15,7 +15,7 @@
 source "$(dirname "$0")/lib.sh"
 
 REPO_DIR="${REPO_DIR:-$(cd "$INSTALL_DIR/../.." && pwd)}"
-MEDIAMTX_VERSION="${MEDIAMTX_VERSION:-v1.9.3}"   # pinned; bump deliberately
+MEDIAMTX_VERSION="${MEDIAMTX_VERSION:-v1.11.3}"   # pinned; bump deliberately
 MEDIAMTX_BIN=/usr/local/bin/mediamtx
 MEDIAMTX_YML=/etc/mediamtx.yml
 
@@ -53,6 +53,63 @@ resolve_record_env() {
   fi
   default_var RECORD_MEDIAMTX_SEGMENT_FILE_DURATION 1h
   default_var RECORD_MEDIAMTX_DELETE_AFTER 24h
+  # Bare numbers (e.g. "24") are ambiguous — mediamtx expects a Go duration like 24h.
+  if [[ "${RECORD_MEDIAMTX_DELETE_AFTER}" =~ ^[0-9]+$ ]]; then
+    RECORD_MEDIAMTX_DELETE_AFTER="${RECORD_MEDIAMTX_DELETE_AFTER}h"
+    warn "RECORD_MEDIAMTX_DELETE_AFTER had no unit; assuming hours (${RECORD_MEDIAMTX_DELETE_AFTER})"
+  fi
+}
+
+# Pick the best writable path for recordings: prefer RECORD_PATH when it is a
+# mountpoint, else auto-detect an NVMe SSD (even if the desktop mounted it under
+# /media/... instead of /var/kallon/recordings).
+resolve_record_path() {
+  default_var RECORD_PATH /var/kallon/recordings
+
+  if mountpoint -q "${RECORD_PATH}" 2>/dev/null; then
+    ok "recording path ${RECORD_PATH} is a mountpoint"
+    return
+  fi
+
+  # Try mounting the labelled Kallon recording partition at the canonical path.
+  if command -v blkid >/dev/null 2>&1; then
+    local dev=""
+    dev="$(blkid -L kallon-rec 2>/dev/null || true)"
+    if [[ -n "$dev" && -b "$dev" ]]; then
+      ensure_dir "${RECORD_PATH}" 0755 root root
+      if mount "$dev" "${RECORD_PATH}" 2>/dev/null; then
+        ok "mounted ${dev} (LABEL=kallon-rec) at ${RECORD_PATH}"
+        return
+      fi
+      warn "found ${dev} (LABEL=kallon-rec) but mount to ${RECORD_PATH} failed — scanning existing mounts"
+    fi
+  fi
+
+  # SSD already mounted elsewhere (e.g. GNOME "Other Locations") — use that path.
+  local best="" best_avail=0 line dev mnt fstype avail_kb
+  while IFS= read -r line; do
+    dev="${line%% *}"
+  [[ "$dev" == /dev/nvme* ]] || continue
+    mnt="$(awk '{print $2}' <<<"$line")"
+    fstype="$(awk '{print $3}' <<<"$line")"
+    [[ "$fstype" =~ ^(ext4|xfs|btrfs)$ ]] || continue
+    [[ -d "$mnt" && -w "$mnt" ]] || continue
+    avail_kb="$(df -Pk "$mnt" 2>/dev/null | awk 'NR==2{print $4}')"
+    avail_kb="${avail_kb:-0}"
+    if (( avail_kb > best_avail )); then
+      best_avail=$avail_kb
+      best="$mnt"
+    fi
+  done < <(grep -E '^/dev/nvme' /proc/mounts 2>/dev/null || true)
+
+  if [[ -n "$best" ]]; then
+    RECORD_PATH="$best"
+    export RECORD_PATH
+    ok "auto-selected NVMe recording path: ${RECORD_PATH} (not at canonical mount — update fstab if you want /var/kallon/recordings)"
+    return
+  fi
+
+  warn "RECORD_ENABLE=1 but no NVMe mount found — recordings will land on ${RECORD_PATH} (OS partition unless you mount SSD there)"
 }
 
 render_yml() {
@@ -61,7 +118,7 @@ render_yml() {
   default_var CAMERA_RTSP_PATH '/cam/realmonitor?channel=1&subtype=0'
   default_var CAMERA_PASSWORD 'CAM_PASSWORD'
   default_var RECORD_ENABLE 0
-  default_var RECORD_PATH /var/kallon/recordings
+  resolve_record_path
   resolve_record_env
 
   local -a cams; split_csv "$CAMERA_IPS" cams
@@ -125,13 +182,10 @@ main() {
   require_root
   load_env
   default_var RECORD_ENABLE 0
-  default_var RECORD_PATH /var/kallon/recordings
+  resolve_record_path
   install_binary
   render_yml
   if [[ "${RECORD_ENABLE}" == "1" ]]; then
-    if ! mountpoint -q "${RECORD_PATH}" 2>/dev/null; then
-      warn "RECORD_ENABLE=1 but ${RECORD_PATH} is not a separate mountpoint — recordings will land on the OS partition."
-    fi
     ensure_dir "${RECORD_PATH}" 0755 root root
     ok "recording directory ensured: ${RECORD_PATH}"
   fi

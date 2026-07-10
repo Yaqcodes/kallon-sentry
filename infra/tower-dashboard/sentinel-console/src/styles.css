@@ -95,6 +95,15 @@ body {
 .snap-flash { animation: snapFade .38s ease-out forwards; z-index: 7; }
 @keyframes snapFade { 0% { opacity: .85 } 100% { opacity: 0 } }
 
+.snap-toast {
+  position: absolute; left: 50%; bottom: 88px; transform: translateX(-50%);
+  max-width: calc(100% - 32px); padding: 7px 12px; border-radius: 5px;
+  background: rgba(10, 14, 17, .88); border: 1px solid #3a4650;
+  font-family: 'JetBrains Mono', monospace; font-size: 10px; letter-spacing: .06em;
+  color: #eef3f7; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  pointer-events: none; z-index: 8;
+}
+
 .control {
   display: flex; flex-direction: column; gap: 16px; min-height: 0;
   background: #10171d; border: 1px solid #232c34; border-radius: 8px; padding: 16px;
