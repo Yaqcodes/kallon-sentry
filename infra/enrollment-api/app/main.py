@@ -27,6 +27,7 @@ import sys
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, ValidationError
 
@@ -163,6 +164,35 @@ app = FastAPI(
     ),
     openapi_tags=OPENAPI_TAGS,
 )
+
+
+def _parse_cors_origins() -> list[str]:
+    """Comma-separated browser origins allowed to call the Platform API cross-origin.
+
+    Set ``KALLON_CORS_ORIGINS`` in enrollment-api.env, e.g.
+    ``https://sentinel-dashboard.vercel.app,http://localhost:5174``. Use ``*`` only
+    in lab — any website could then call the API from a user's browser session.
+    """
+    raw = os.environ.get("KALLON_CORS_ORIGINS", "").strip()
+    if not raw:
+        return []
+    if raw == "*":
+        return ["*"]
+    return [part.strip() for part in raw.split(",") if part.strip()]
+
+
+_cors_origins = _parse_cors_origins()
+if _cors_origins:
+    log.info("CORS enabled for origins: %s", _cors_origins)
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=_cors_origins,
+        allow_credentials=False,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+else:
+    log.info("CORS disabled — set KALLON_CORS_ORIGINS for Vercel/browser dashboards")
 
 # Fleet + tower-proxy + alerts (docs/platform-api.md). Enrollment routes below
 # keep their original shapes — factory images depend on them.

@@ -15,7 +15,8 @@ control plane service (`infra/enrollment-api/`, FastAPI) and consists of:
 
 SDK consumers use **one base URL** (the control plane). They never call a
 tower directly. The client library for this API is
-[`sentinel-sdk`](https://github.com/Yaqcodes/sentinel-sdk).
+[`sentinel-sdk`](https://github.com/Yaqcodes/sentinel-sdk). The buyer-facing
+web dashboard is [`sentinel-dashboard`](https://github.com/olowu289/sentinel-dashboard).
 
 Machine-readable spec: `GET /openapi.json` on a running control plane.
 
@@ -24,6 +25,19 @@ Machine-readable spec: `GET /openapi.json` on a running control plane.
 > `X-Kallon-Api-Key` so they need no changes when enforcement lands. Until
 > then, do not expose fleet/proxy routes beyond the ops network; only
 > `/v1/enroll*` may be public.
+
+### Browser dashboards (Vercel + CORS)
+
+When the buyer dashboard is hosted on a **different origin** than the control
+plane (e.g. Vercel → Artemis/ngrok), the browser sends an `OPTIONS` preflight
+before `GET`/`POST` with `X-Kallon-Api-Key`. Set on the API host:
+
+```env
+KALLON_CORS_ORIGINS=https://your-app.vercel.app,http://localhost:5174
+```
+
+Restart enrollment-api after changing. Use `*` only in lab. Without this,
+preflight returns **405** and fleet calls fail from the browser.
 
 ---
 
