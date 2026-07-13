@@ -136,7 +136,11 @@ tested in `tests/test_alert_hmac.py`.
 
 - A WireGuard peer in each customer subnet (for RTSP pull), or consume from the
   hub RTSP relay.
-- An ingest endpoint set as `ALERT_FORWARD_URL` on each hub listener (verified
-  alerts are POSTed through verbatim).
+- Set `ALERT_FORWARD_URL` on each hub listener to the control plane ingest:
+  `POST https://<control-plane>/v1/alerts/ingest` (see `docs/platform-api.md` §4).
+  Optionally set matching `KALLON_ALERT_INGEST_TOKEN` on the control plane and
+  configure the hub forwarder to send `X-Kallon-Ingest-Token`.
+- The customer dashboard consumes `GET /v1/events` (SSE) and/or
+  `GET /v1/customers/{id}/alerts` — no separate alert backend required.
 
 *Contract owner: Terra platform. Changes here are breaking — version this doc.*

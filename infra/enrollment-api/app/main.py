@@ -38,6 +38,7 @@ from registry.identity import validate  # noqa: E402
 
 from . import peering  # noqa: E402
 from .peering import get_peer_adder  # noqa: E402
+from .alerts import router as alerts_router  # noqa: E402
 from .platform import router as platform_router  # noqa: E402
 
 
@@ -129,11 +130,44 @@ def _configure_logging() -> None:
 _configure_logging()
 log = logging.getLogger("enrollment")
 
-app = FastAPI(title="Kallon Platform API", version="1.1")
+OPENAPI_TAGS = [
+    {
+        "name": "Health",
+        "description": "Liveness probe for load balancers and monitoring.",
+    },
+    {
+        "name": "Enrollment",
+        "description": "Tower first-boot enrollment. Called by Jetsons, not buyer dashboards.",
+    },
+    {
+        "name": "Fleet",
+        "description": "Customers and towers from the Postgres registry.",
+    },
+    {
+        "name": "Tower proxy",
+        "description": "PTZ, snapshots, sensors, and stream readiness proxied over WireGuard.",
+    },
+    {
+        "name": "Alerts",
+        "description": "Hub-forwarded tower events for customer dashboards (ingest, history, SSE).",
+    },
+]
 
-# Fleet + tower-proxy endpoints (docs/platform-api.md). Enrollment routes
-# below keep their original shapes — factory images depend on them.
+app = FastAPI(
+    title="Kallon Platform API",
+    version="1.2",
+    description=(
+        "Unified Terra control plane: fleet registry, tower proxy, enrollment, and "
+        "dashboard alert ingest. SDK consumers use `/v1/customers`, `/v1/towers`, and "
+        "tower proxy routes. Towers use `/v1/enroll` on first boot."
+    ),
+    openapi_tags=OPENAPI_TAGS,
+)
+
+# Fleet + tower-proxy + alerts (docs/platform-api.md). Enrollment routes below
+# keep their original shapes — factory images depend on them.
 app.include_router(platform_router)
+app.include_router(alerts_router)
 
 
 @app.on_event("startup")
@@ -221,12 +255,12 @@ def _registry():
 
 
 # ── routes ───────────────────────────────────────────────────────────────────
-@app.get("/healthz")
+@app.get("/healthz", tags=["Health"])
 def healthz() -> dict:
     return {"status": "ok"}
 
 
-@app.post("/v1/enroll", response_model=EnrollResponse)
+@app.post("/v1/enroll", response_model=EnrollResponse, tags=["Enrollment"])
 async def enroll(request: Request) -> EnrollResponse:
     await _verify_service_hmac(request)
     body = await request.body()
@@ -395,7 +429,7 @@ async def enroll(request: Request) -> EnrollResponse:
         reg.close()
 
 
-@app.post("/v1/enroll/confirm")
+@app.post("/v1/enroll/confirm", tags=["Enrollment"])
 async def enroll_confirm(req: ConfirmRequest) -> dict:
     stored = _CONFIRM_TOKENS.get(req.device_id)
     if not stored or not hmac.compare_digest(stored, _sha256(req.confirm_token)):

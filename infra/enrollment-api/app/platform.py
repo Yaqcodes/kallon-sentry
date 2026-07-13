@@ -41,7 +41,7 @@ from registry.interface import Customer, Tower
 
 log = logging.getLogger("platform")
 
-router = APIRouter(prefix="/v1", tags=["platform"])
+router = APIRouter(prefix="/v1")
 
 TOWER_GATEWAY_PORT = int(os.environ.get("KALLON_TOWER_GATEWAY_PORT", "8766"))
 PROXY_CONNECT_TIMEOUT = float(os.environ.get("KALLON_PROXY_CONNECT_TIMEOUT", "3"))
@@ -101,7 +101,7 @@ def _tower_public(t: Tower) -> dict[str, Any]:
 
 
 # ── fleet endpoints ──────────────────────────────────────────────────────────
-@router.get("/customers")
+@router.get("/customers", tags=["Fleet"])
 def list_customers(request: Request):
     if (resp := _auth_check(request)) is not None:
         return resp
@@ -115,7 +115,7 @@ def list_customers(request: Request):
         reg.close()
 
 
-@router.get("/customers/{customer_id}")
+@router.get("/customers/{customer_id}", tags=["Fleet"])
 def get_customer(customer_id: str, request: Request):
     if (resp := _auth_check(request)) is not None:
         return resp
@@ -131,7 +131,7 @@ def get_customer(customer_id: str, request: Request):
         reg.close()
 
 
-@router.get("/customers/{customer_id}/towers")
+@router.get("/customers/{customer_id}/towers", tags=["Fleet"])
 def list_customer_towers(customer_id: str, request: Request):
     if (resp := _auth_check(request)) is not None:
         return resp
@@ -148,7 +148,7 @@ def list_customer_towers(customer_id: str, request: Request):
         reg.close()
 
 
-@router.get("/towers")
+@router.get("/towers", tags=["Fleet"])
 def list_towers(request: Request, status: Optional[str] = None):
     if (resp := _auth_check(request)) is not None:
         return resp
@@ -165,7 +165,7 @@ def list_towers(request: Request, status: Optional[str] = None):
         reg.close()
 
 
-@router.get("/towers/{device_id}")
+@router.get("/towers/{device_id}", tags=["Fleet"])
 def get_tower(device_id: str, request: Request):
     if (resp := _auth_check(request)) is not None:
         return resp
@@ -187,7 +187,7 @@ class RegisterTowerRequest(BaseModel):
     group_id: Optional[str] = None
 
 
-@router.post("/towers", status_code=201)
+@router.post("/towers", status_code=201, tags=["Fleet"])
 async def register_tower(request: Request):
     """Factory registration. Terra-ops-only until auth lands (returns a
     one-time enrollment token — see docs/platform-api.md §2)."""
@@ -290,7 +290,7 @@ class PTZMoveRequest(BaseModel):
     seconds: Optional[float] = Field(default=None, le=10)
 
 
-@router.post("/towers/{device_id}/ptz/move")
+@router.post("/towers/{device_id}/ptz/move", tags=["Tower proxy"])
 async def ptz_move(device_id: str, request: Request):
     if (resp := _auth_check(request)) is not None:
         return resp
@@ -315,7 +315,7 @@ class PTZStopRequest(BaseModel):
     home: bool = False
 
 
-@router.post("/towers/{device_id}/ptz/stop")
+@router.post("/towers/{device_id}/ptz/stop", tags=["Tower proxy"])
 async def ptz_stop(device_id: str, request: Request):
     if (resp := _auth_check(request)) is not None:
         return resp
@@ -326,14 +326,14 @@ async def ptz_stop(device_id: str, request: Request):
     return await _proxy(device_id, "POST", "/api/ptz/stop", json_body=payload.model_dump())
 
 
-@router.get("/towers/{device_id}/ptz/status")
+@router.get("/towers/{device_id}/ptz/status", tags=["Tower proxy"])
 async def ptz_status(device_id: str, request: Request, camera: int = 1):
     if (resp := _auth_check(request)) is not None:
         return resp
     return await _proxy(device_id, "GET", "/api/ptz/status", params={"camera": camera})
 
 
-@router.get("/towers/{device_id}/snapshot/cam{camera}")
+@router.get("/towers/{device_id}/snapshot/cam{camera}", tags=["Tower proxy"])
 async def snapshot(device_id: str, camera: int, request: Request):
     if (resp := _auth_check(request)) is not None:
         return resp
@@ -342,14 +342,14 @@ async def snapshot(device_id: str, camera: int, request: Request):
     )
 
 
-@router.get("/towers/{device_id}/status")
+@router.get("/towers/{device_id}/status", tags=["Tower proxy"])
 async def tower_status(device_id: str, request: Request):
     if (resp := _auth_check(request)) is not None:
         return resp
     return await _proxy(device_id, "GET", "/api/status")
 
 
-@router.get("/towers/{device_id}/streams")
+@router.get("/towers/{device_id}/streams", tags=["Tower proxy"])
 async def tower_streams(device_id: str, request: Request):
     if (resp := _auth_check(request)) is not None:
         return resp

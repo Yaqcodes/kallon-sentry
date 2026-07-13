@@ -12,7 +12,8 @@ Env:
   ALERT_KEY_PATH   path to the base64 HMAC key (default /etc/kallon/alert.key)
   ALERT_BIND       bind address (default 10.50.0.1 — the wg0 gateway IP)
   ALERT_PORT       port (default 8080)
-  ALERT_FORWARD_URL  optional: POST verified alerts here (e.g. dashboard ingest)
+  ALERT_FORWARD_URL  optional: POST verified alerts here (e.g. control plane /v1/alerts/ingest)
+  ALERT_INGEST_TOKEN optional: sent as X-Kallon-Ingest-Token on forward (matches KALLON_ALERT_INGEST_TOKEN)
 """
 from __future__ import annotations
 
@@ -95,10 +96,14 @@ class Handler(BaseHTTPRequestHandler):
 
     @staticmethod
     def _forward(body: bytes) -> None:
+        headers = {"Content-Type": "application/json"}
+        ingest_token = os.environ.get("ALERT_INGEST_TOKEN", "")
+        if ingest_token:
+            headers["X-Kallon-Ingest-Token"] = ingest_token
         try:
             req = urllib.request.Request(
                 ALERT_FORWARD_URL, data=body,
-                headers={"Content-Type": "application/json"}, method="POST",
+                headers=headers, method="POST",
             )
             urllib.request.urlopen(req, timeout=10)  # noqa: S310
         except Exception as e:  # noqa: BLE001
