@@ -141,7 +141,7 @@ User=${RUNTIME_USER}
 Group=${RUNTIME_USER}
 WorkingDirectory=$DASH_DIR
 EnvironmentFile=$KALLON_ENV
-Environment=DASH_BIND=127.0.0.1
+Environment=DASH_BIND=wg0
 Environment=DASH_PORT=${TOWER_DASHBOARD_PORT}
 Environment=WEB_ROOT=$DASH_DIR/web
 Environment=WATCHDOG_STATUS_URL=http://127.0.0.1:${TOWER_STATUS_API_PORT}
@@ -159,7 +159,7 @@ WantedBy=multi-user.target
 EOF
   install -m 0644 -o root -g root "$tmp" /etc/systemd/system/kallon-tower-dashboard.service
   rm -f "$tmp"
-  ok "rendered kallon-tower-dashboard.service (127.0.0.1:${TOWER_DASHBOARD_PORT})"
+  ok "rendered kallon-tower-dashboard.service (wg0 + loopback :${TOWER_DASHBOARD_PORT})"
 }
 
 install_desktop_launcher() {

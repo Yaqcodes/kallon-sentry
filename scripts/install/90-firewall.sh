@@ -1,10 +1,7 @@
 #!/usr/bin/env bash
-# 90-firewall.sh — restrict RTSP rebroadcast (:8554) to lo + wg0 only.
+# 90-firewall.sh — restrict RTSP (:8554) and tower gateway (:8766) to lo + wg0.
 #
-# Renders deploy/iptables-rebroadcast.rules.example (substituting WG_IFACE) and
-# applies it idempotently, then persists. NEVER touches SSH on the WAN iface.
-#
-# Idempotent: rules are flushed/re-applied for the 8554 chain only via a marker.
+# Applies iptables rules idempotently. NEVER touches SSH on the WAN iface.
 source "$(dirname "$0")/lib.sh"
 
 REPO_DIR="${REPO_DIR:-$(cd "$INSTALL_DIR/../.." && pwd)}"
@@ -14,6 +11,7 @@ main() {
   require_root
   load_env
   default_var WG_IFACE wg0
+  default_var TOWER_DASHBOARD_PORT 8766
   require_cmd iptables
 
   [[ -f "$TEMPLATE" ]] || die "missing $TEMPLATE"
@@ -34,6 +32,11 @@ main() {
   add_rule INPUT -i "$WG_IFACE" -p tcp --dport 8554 -j ACCEPT
   add_rule INPUT -p tcp --dport 8554 -j DROP
 
+  # Platform hub agent reaches gateway over WireGuard; keep SPA on loopback.
+  add_rule INPUT -i lo -p tcp --dport "$TOWER_DASHBOARD_PORT" -j ACCEPT
+  add_rule INPUT -i "$WG_IFACE" -p tcp --dport "$TOWER_DASHBOARD_PORT" -j ACCEPT
+  add_rule INPUT -p tcp --dport "$TOWER_DASHBOARD_PORT" -j DROP
+
   # Persist (iptables-persistent / netfilter-persistent).
   if command -v netfilter-persistent >/dev/null 2>&1; then
     netfilter-persistent save >/dev/null 2>&1 || warn "netfilter-persistent save failed."
@@ -42,7 +45,7 @@ main() {
   else
     warn "no persistence backend; rules will not survive reboot."
   fi
-  ok "firewall rules applied (8554 on lo + $WG_IFACE only)"
+  ok "firewall rules applied (8554 + ${TOWER_DASHBOARD_PORT} on lo + $WG_IFACE only)"
 }
 
 main "$@"

@@ -1,10 +1,11 @@
-"""Integration test for the Platform API (fleet + tower proxy).
+"""Integration test for the Platform API (fleet + hub-mediated tower proxy).
 
 Run: python tests/test_platform_api.py
 Requires: fastapi, httpx (TestClient).
 
-Uses the SQLite registry and a mock tower-gateway HTTP server on loopback so
-the proxy path (control plane -> tower gateway) is exercised without hardware.
+Mocks:
+  - Hub tower-proxy on loopback (Artemis → hub)
+  - Tower gateway on loopback (hub → tower)
 """
 from __future__ import annotations
 
@@ -14,12 +15,13 @@ import os
 import sys
 import tempfile
 import threading
+import urllib.error
+import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
-# Configure providers BEFORE importing the app.
 _db = os.path.join(tempfile.gettempdir(), "kallon_platform_test.db")
 if os.path.exists(_db):
     os.remove(_db)
@@ -30,12 +32,20 @@ os.environ.pop("ENROLLMENT_HMAC_KEY", None)
 os.environ.pop("KALLON_PLATFORM_API_KEY", None)
 
 MOCK_GATEWAY_PORT = 18766
+MOCK_HUB_PROXY_PORT = 18767
+HUB_TOKEN = "test-hub-proxy-token"
 os.environ["KALLON_TOWER_GATEWAY_PORT"] = str(MOCK_GATEWAY_PORT)
+os.environ["KALLON_HUB_PROXY_PORT"] = str(MOCK_HUB_PROXY_PORT)
+os.environ["KALLON_HUB_PROXY_TOKEN"] = HUB_TOKEN
+os.environ["KALLON_PROXY_VIA_HUB"] = "1"
 
 from registry import Customer, Tower, get_registry  # noqa: E402
 from registry.identity import device_id, new_claim_code, new_enrollment_token  # noqa: E402
 
 FAKE_JPEG = b"\xff\xd8\xff\xe0" + b"J" * 64 + b"\xff\xd9"
+
+# Captured by hub mock for assertions
+LAST_HUB_HEADERS: dict[str, str] = {}
 
 
 class MockGateway(BaseHTTPRequestHandler):
@@ -83,15 +93,84 @@ class MockGateway(BaseHTTPRequestHandler):
         pass
 
 
+class MockHubProxy(BaseHTTPRequestHandler):
+    """Mimics infra/hub/tower_proxy.py — asserts auth headers then forwards to mock gateway."""
+
+    def _reply(self, code: int, body: bytes, content_type: str = "application/json") -> None:
+        self.send_response(code)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self) -> None:  # noqa: N802
+        self._forward()
+
+    def do_POST(self) -> None:  # noqa: N802
+        self._forward()
+
+    def _forward(self) -> None:
+        global LAST_HUB_HEADERS
+        LAST_HUB_HEADERS = {
+            "token": self.headers.get("X-Kallon-Hub-Proxy-Token", ""),
+            "vpn_ip": self.headers.get("X-Kallon-Tower-Vpn-Ip", ""),
+        }
+        if LAST_HUB_HEADERS["token"] != HUB_TOKEN:
+            self._reply(401, json.dumps({"error": {"code": "unauthorized", "message": "bad token"}}).encode())
+            return
+        path = self.path.split("?", 1)[0]
+        # /proxy/{device_id}/api/...
+        parts = path.strip("/").split("/", 2)
+        if len(parts) < 3 or parts[0] != "proxy":
+            self._reply(404, json.dumps({"error": {"code": "not_found", "message": path}}).encode())
+            return
+        rest = "/" + parts[2]
+        qs = ""
+        if "?" in self.path:
+            qs = "?" + self.path.split("?", 1)[1]
+        vpn_ip = LAST_HUB_HEADERS["vpn_ip"] or "127.0.0.1"
+        target = f"http://{vpn_ip}:{MOCK_GATEWAY_PORT}{rest}{qs}"
+        length = int(self.headers.get("Content-Length", "0") or 0)
+        body = self.rfile.read(length) if length else None
+        headers = {}
+        if self.headers.get("Content-Type"):
+            headers["Content-Type"] = self.headers["Content-Type"]
+        try:
+            req = urllib.request.Request(target, data=body, headers=headers, method=self.command)
+            with urllib.request.urlopen(req, timeout=5) as resp:  # noqa: S310
+                payload = resp.read()
+                ct = resp.headers.get("Content-Type", "application/json")
+                self._reply(resp.status, payload, ct)
+        except urllib.error.HTTPError as exc:
+            payload = exc.read() if exc.fp else b""
+            ct = exc.headers.get("Content-Type", "application/json") if exc.headers else "application/json"
+            self._reply(exc.code, payload, ct)
+        except Exception as exc:  # noqa: BLE001
+            self._reply(
+                503,
+                json.dumps({
+                    "error": {
+                        "code": "tower_offline",
+                        "message": f"tower did not respond ({type(exc).__name__})",
+                        "device_id": parts[1],
+                    },
+                }).encode(),
+            )
+
+    def log_message(self, *args) -> None:
+        pass
+
+
 def seed() -> dict:
     reg = get_registry()
     reg.create_customer(Customer(
         customer_id="cust_lab", display_name="Kallon Lab",
         vpn_subnet="10.50.0.0/24", hub_provider="manual",
     ))
+    # Hub host = 127.0.0.1 so Artemis dials our mock hub proxy.
     reg.update_customer_hub(
         "cust_lab",
-        gateway_endpoint="198.51.100.9:51820",
+        gateway_endpoint="127.0.0.1:51820",
         gateway_public_key="HUBPUBKEY==",
         hub_alert_url="http://10.50.0.1:8080/alerts",
         status="active",
@@ -105,8 +184,7 @@ def seed() -> dict:
             enrollment_token_hash=hashlib.sha256(tok.encode()).hexdigest(),
         ))
         tokens[did] = tok
-    # Tower 1 "enrolls" with a loopback VPN IP so the proxy hits our mock
-    # gateway. Tower 2 stays unenrolled (no vpn_ip) for the 409 path.
+    # Tower VPN IP is loopback so hub mock can reach mock gateway.
     reg.mark_tower_enrolled(device_id("lab", 1), wg_public_key="T1" + "A" * 41 + "=", vpn_ip="127.0.0.1")
     reg.close()
     return tokens
@@ -115,7 +193,9 @@ def seed() -> dict:
 def main() -> int:
     seed()
     gateway = ThreadingHTTPServer(("127.0.0.1", MOCK_GATEWAY_PORT), MockGateway)
+    hub = ThreadingHTTPServer(("127.0.0.1", MOCK_HUB_PROXY_PORT), MockHubProxy)
     threading.Thread(target=gateway.serve_forever, daemon=True).start()
+    threading.Thread(target=hub.serve_forever, daemon=True).start()
 
     from fastapi.testclient import TestClient
     from app.main import app  # type: ignore
@@ -164,9 +244,11 @@ def main() -> int:
     r = client.post("/v1/towers", json={"customer_id": "cust_lab", "serial": 3})
     check(r.status_code == 409, f"duplicate registration 409 ({r.status_code})")
 
-    # ── tower proxy: enrolled tower vs mock gateway ─────────────────────────
+    # ── tower proxy via hub agent ────────────────────────────────────────────
     r = client.get(f"/v1/towers/{d1}/status")
-    check(r.status_code == 200 and r.json()["temperature_c"] == 45.0, "proxy status")
+    check(r.status_code == 200 and r.json()["temperature_c"] == 45.0, "proxy status via hub")
+    check(LAST_HUB_HEADERS.get("token") == HUB_TOKEN, "hub received proxy token")
+    check(LAST_HUB_HEADERS.get("vpn_ip") == "127.0.0.1", "hub received tower vpn ip")
 
     r = client.get(f"/v1/towers/{d1}/streams")
     check(r.json()["paths"][0]["ready"] is True, "proxy streams")
@@ -200,7 +282,7 @@ def main() -> int:
     r = client.get("/v1/towers/kln_lab_000099/status")
     check(r.status_code == 404, "unknown tower 404")
 
-    # Offline: point tower 1's gateway port somewhere closed.
+    # Offline: shut gateway so hub forward fails → 503 tower_offline
     gateway.shutdown()
     r = client.get(f"/v1/towers/{d1}/status")
     check(r.status_code == 503 and r.json()["error"]["code"] == "tower_offline",

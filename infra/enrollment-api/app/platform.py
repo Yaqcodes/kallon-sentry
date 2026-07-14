@@ -44,10 +44,19 @@ log = logging.getLogger("platform")
 router = APIRouter(prefix="/v1")
 
 TOWER_GATEWAY_PORT = int(os.environ.get("KALLON_TOWER_GATEWAY_PORT", "8766"))
+HUB_PROXY_PORT = int(os.environ.get("KALLON_HUB_PROXY_PORT", "8767"))
+HUB_PROXY_TOKEN = os.environ.get("KALLON_HUB_PROXY_TOKEN", "")
 PROXY_CONNECT_TIMEOUT = float(os.environ.get("KALLON_PROXY_CONNECT_TIMEOUT", "3"))
 PROXY_READ_TIMEOUT = float(os.environ.get("KALLON_PROXY_READ_TIMEOUT", "10"))
 SNAPSHOT_READ_TIMEOUT = float(os.environ.get("KALLON_SNAPSHOT_READ_TIMEOUT", "20"))
 PLATFORM_API_KEY = os.environ.get("KALLON_PLATFORM_API_KEY", "")
+
+# When true (default), Artemis dials the customer hub tower-proxy on the public
+# internet instead of the tower VPN IP. Set KALLON_PROXY_VIA_HUB=0 only for
+# lab setups where Artemis is itself a WireGuard NOC peer.
+PROXY_VIA_HUB = os.environ.get("KALLON_PROXY_VIA_HUB", "1").strip().lower() not in (
+    "0", "false", "no", "off",
+)
 
 
 # ── error envelope ───────────────────────────────────────────────────────────
@@ -232,26 +241,68 @@ async def register_tower(request: Request):
 
 
 # ── tower proxy ──────────────────────────────────────────────────────────────
-def _tower_base_url(device_id: str) -> tuple[Optional[str], Optional[JSONResponse]]:
-    """Resolve a device to its gateway base URL, or an error response."""
+def _hub_host_from_endpoint(gateway_endpoint: Optional[str]) -> Optional[str]:
+    """Extract public host from registry gateway_endpoint (host:51820)."""
+    if not gateway_endpoint:
+        return None
+    host = gateway_endpoint.strip().split(":", 1)[0].strip()
+    return host or None
+
+
+def _tower_proxy_target(
+    device_id: str,
+) -> tuple[Optional[str], Optional[str], Optional[JSONResponse]]:
+    """Resolve Artemisper → hub/tower URL pieces.
+
+    Returns (request_url_base_with_path_prefix, vpn_ip, error).
+    When PROXY_VIA_HUB: base is ``http://{hub}:{port}/proxy/{device_id}``.
+    When direct (lab): base is ``http://{vpn_ip}:{tower_port}``.
+    Paths appended by callers are tower-gateway paths (``/api/...``).
+    """
     reg = get_registry()
     try:
         tower = reg.get_tower(device_id)
+        if not tower.vpn_ip:
+            return None, None, _err(
+                409, "tower_not_enrolled",
+                f"tower {device_id} has no VPN IP yet (status={tower.status!r}); "
+                "it must complete first-boot enrollment before tower APIs work",
+                device_id=device_id,
+            )
+        if not PROXY_VIA_HUB:
+            return f"http://{tower.vpn_ip}:{TOWER_GATEWAY_PORT}", tower.vpn_ip, None
+
+        try:
+            cust = reg.get_customer(tower.customer_id)
+        except NotFound:
+            return None, None, _err(
+                404, "not_found",
+                f"customer {tower.customer_id!r} missing for tower {device_id}",
+                device_id=device_id,
+            )
+        hub_host = _hub_host_from_endpoint(cust.gateway_endpoint)
+        if not hub_host:
+            return None, None, _err(
+                503, "hub_unreachable",
+                f"customer {tower.customer_id} has no gateway_endpoint; "
+                "provision the hub before tower proxy works",
+                device_id=device_id,
+            )
+        if not HUB_PROXY_TOKEN:
+            return None, None, _err(
+                503, "hub_proxy_misconfigured",
+                "KALLON_HUB_PROXY_TOKEN is unset on the control plane",
+                device_id=device_id,
+            )
+        base = f"http://{hub_host}:{HUB_PROXY_PORT}/proxy/{device_id}"
+        return base, tower.vpn_ip, None
     except NotFound:
-        return None, _err(404, "not_found", f"unknown device_id {device_id!r}")
+        return None, None, _err(404, "not_found", f"unknown device_id {device_id!r}")
     except RegistryError as e:
         log.exception("registry error resolving tower %s", device_id)
-        return None, _err(503, "registry_unavailable", str(e))
+        return None, None, _err(503, "registry_unavailable", str(e))
     finally:
         reg.close()
-    if not tower.vpn_ip:
-        return None, _err(
-            409, "tower_not_enrolled",
-            f"tower {device_id} has no VPN IP yet (status={tower.status!r}); "
-            "it must complete first-boot enrollment before tower APIs work",
-            device_id=device_id,
-        )
-    return f"http://{tower.vpn_ip}:{TOWER_GATEWAY_PORT}", None
 
 
 async def _proxy(
@@ -263,20 +314,30 @@ async def _proxy(
     params: Optional[dict[str, Any]] = None,
     read_timeout: float = PROXY_READ_TIMEOUT,
 ) -> Response:
-    base, err = _tower_base_url(device_id)
+    base, vpn_ip, err = _tower_proxy_target(device_id)
     if err is not None:
         return err
+    assert base is not None and vpn_ip is not None
     timeout = httpx.Timeout(connect=PROXY_CONNECT_TIMEOUT, read=read_timeout, write=10.0, pool=5.0)
+    headers: dict[str, str] = {}
+    if PROXY_VIA_HUB:
+        headers["X-Kallon-Hub-Proxy-Token"] = HUB_PROXY_TOKEN
+        headers["X-Kallon-Tower-Vpn-Ip"] = vpn_ip
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
-            resp = await client.request(method, f"{base}{path}", json=json_body, params=params)
+            resp = await client.request(
+                method, f"{base}{path}", json=json_body, params=params, headers=headers,
+            )
     except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout, httpx.NetworkError) as exc:
         log.warning("tower %s unreachable at %s%s: %s", device_id, base, path, exc)
         return _err(
             503, "tower_offline",
-            f"tower did not respond ({exc.__class__.__name__}) — VPN tunnel down or tower rebooting",
+            f"tower did not respond ({exc.__class__.__name__}) — "
+            + ("hub proxy unreachable or VPN tunnel down" if PROXY_VIA_HUB
+               else "VPN tunnel down or tower rebooting"),
             device_id=device_id,
         )
+    # Hub agent already returns platform-shaped errors; pass through.
     content_type = resp.headers.get("content-type", "application/json")
     return Response(content=resp.content, status_code=resp.status_code, media_type=content_type)
 

@@ -7,8 +7,10 @@ control plane service (`infra/enrollment-api/`, FastAPI) and consists of:
 
 - **Fleet endpoints** — customers/towers, backed directly by the Postgres registry.
 - **Tower proxy endpoints** — PTZ, snapshots, sensor status, stream readiness;
-  forwarded by the control plane over WireGuard to the tower gateway
-  (`infra/tower-dashboard/gateway.py`, port `8766` on the tower's VPN IP).
+  the control plane calls an authenticated **hub tower-proxy agent** on the
+  customer hub's public IP (`:8767`). The hub forwards over WireGuard to the
+  tower gateway (`infra/tower-dashboard/gateway.py`, `:8766` on the tower VPN IP).
+  Artemis does **not** join customer WireGuard meshes.
 - **Alert endpoints** — hub-forwarded tower events for customer dashboards
   (ingest, history, SSE fan-out).
 - **Enrollment endpoints** — pre-existing first-boot flow (unchanged).
@@ -38,6 +40,13 @@ KALLON_CORS_ORIGINS=https://your-app.vercel.app,http://localhost:5174
 
 Restart enrollment-api after changing. Use `*` only in lab. Without this,
 preflight returns **405** and fleet calls fail from the browser.
+
+**ngrok free tier:** browser `GET` requests may still fail CORS even when
+`OPTIONS` returns 200 — ngrok injects an HTML interstitial without
+`Access-Control-Allow-Origin`. The TypeScript SDK sends
+`ngrok-skip-browser-warning: 1` when the base URL contains `ngrok`. SSE
+(`/v1/events` via `EventSource`) cannot send that header; use a same-origin
+proxy or a non-ngrok API URL for live alerts.
 
 ---
 
@@ -496,7 +505,27 @@ See `infra/enrollment-api/app/main.py` docstring and
 
 ## 7. Tower gateway (internal contract)
 
-The control plane proxies to `http://<tower-vpn-ip>:8766`:
+### Control plane → hub → tower
+
+Artemis does **not** dial tower VPN IPs. Default path (`KALLON_PROXY_VIA_HUB=1`):
+
+```text
+SDK → Artemis /v1/towers/{id}/…
+         → http://{hub-public-host}:8767/proxy/{id}/api/…
+              headers: X-Kallon-Hub-Proxy-Token, X-Kallon-Tower-Vpn-Ip
+         → hub agent → http://{tower-vpn-ip}:8766/api/…
+```
+
+| Env (Artemis) | Purpose |
+|---------------|---------|
+| `KALLON_HUB_PROXY_PORT` | Hub agent port (default `8767`) |
+| `KALLON_HUB_PROXY_TOKEN` | Shared secret with hub `HUB_PROXY_TOKEN` |
+| `KALLON_PROXY_VIA_HUB` | `1` (default) or `0` for lab when Artemis is a WG NOC peer |
+
+Hub host is derived from `customers.gateway_endpoint` (host before `:51820`).
+Deploy / migrate hubs with `scripts/kallon-gateway-ensure-tower-proxy.sh`.
+
+### Tower gateway routes (on `:8766`)
 
 | Method | Path | Notes |
 |--------|------|-------|
@@ -509,8 +538,7 @@ The control plane proxies to `http://<tower-vpn-ip>:8766`:
 | GET | `/healthz` | |
 
 Gateway binding: `DASH_BIND=wg0` resolves the WireGuard interface address at
-startup (loopback listener retained for the on-Jetson SPA). This surface is
-protected only by VPN membership — see the firewall follow-up in
-`planning/sdk-implementation-plan.md` §5.5.
+startup (loopback listener retained for the on-Jetson SPA). Port `8766` is
+firewalled to `lo` + `wg0` only (`scripts/install/90-firewall.sh`).
 
 *Contract owner: Terra platform. Changes here are breaking — version this doc.*

@@ -20,6 +20,9 @@ CUSTOMER_ID=""; VPN_SUBNET=""; GATEWAY_IP=""; LISTEN_PORT=51820; PUBLIC_ENDPOINT
 OPS_SSH_PUBKEY=""; OPS_SSH_PUBKEY_FILE=""; OPS_SSH_USER="ubuntu"
 ALERT_LISTENER_FILE=""
 ALERT_PORT=8080
+HUB_PROXY_PORT=8767
+HUB_PROXY_TOKEN="${HUB_PROXY_TOKEN:-}"
+TOWER_PROXY_FILE=""
 KALLON_DIR=/opt/kallon-hub
 
 log() { printf '\033[0;36m[gw-init] %s\033[0m\n' "$*" >&2; }
@@ -38,6 +41,9 @@ while [[ $# -gt 0 ]]; do
     --ops-ssh-pubkey-file) OPS_SSH_PUBKEY_FILE="$2"; shift 2 ;;
     --ops-ssh-user)        OPS_SSH_USER="$2"; shift 2 ;;
     --alert-listener-file) ALERT_LISTENER_FILE="$2"; shift 2 ;;
+    --tower-proxy-file)    TOWER_PROXY_FILE="$2"; shift 2 ;;
+    --hub-proxy-port)      HUB_PROXY_PORT="$2"; shift 2 ;;
+    --hub-proxy-token)     HUB_PROXY_TOKEN="$2"; shift 2 ;;
     *) die "unknown arg: $1" ;;
   esac
 done
@@ -117,11 +123,13 @@ ufw default allow outgoing >/dev/null
 ufw allow OpenSSH >/dev/null 2>&1 || ufw allow 22/tcp >/dev/null
 ufw allow "${LISTEN_PORT}/udp" >/dev/null
 ufw allow from "$VPN_SUBNET" to any port "$ALERT_PORT" proto tcp >/dev/null
+# Tower HTTP proxy for Artemis Platform API (token-auth; not VPN-restricted).
+ufw allow "${HUB_PROXY_PORT}/tcp" >/dev/null
 # Hub-and-spoke: NOC/dashboard peers reach tower peers (RTSP :8554, SSH, etc.)
 # over the VPN. ip_forward alone is not enough — UFW drops FORWARD by default.
 ufw route allow in on wg0 out on wg0 >/dev/null
 ufw --force enable >/dev/null
-ok "ufw: ${LISTEN_PORT}/udp; ${ALERT_PORT}/tcp from ${VPN_SUBNET}; wg0 peer forwarding"
+ok "ufw: ${LISTEN_PORT}/udp; ${ALERT_PORT}/tcp from ${VPN_SUBNET}; ${HUB_PROXY_PORT}/tcp; wg0 peer forwarding"
 
 # 6. alert listener (systemd) --------------------------------------------------
 install -d -m 0750 /etc/kallon
@@ -165,11 +173,61 @@ WantedBy=multi-user.target
 EOF
 systemctl daemon-reload
 
+# 6b. tower HTTP proxy (Artemis → hub → tower over wg0) -----------------------
+_tower_proxy_src=""
+if [[ -n "$TOWER_PROXY_FILE" && -f "$TOWER_PROXY_FILE" ]]; then
+  _tower_proxy_src="$TOWER_PROXY_FILE"
+else
+  for _c in "$(dirname "$0")/infra/hub/tower_proxy.py" \
+            "$(dirname "$0")/../infra/hub/tower_proxy.py"; do
+    [[ -f "$_c" ]] && { _tower_proxy_src="$_c"; break; }
+  done
+fi
+if [[ -n "$_tower_proxy_src" ]]; then
+  install -m 0755 "$_tower_proxy_src" "$KALLON_DIR/tower_proxy.py"
+  if [[ -z "$HUB_PROXY_TOKEN" ]]; then
+    HUB_PROXY_TOKEN="$(head -c 24 /dev/urandom | base64 | tr -d '\n/=+')"
+    log "generated HUB_PROXY_TOKEN (copy to Artemis KALLON_HUB_PROXY_TOKEN)"
+  fi
+  umask 027
+  printf 'HUB_PROXY_TOKEN=%s\n' "$HUB_PROXY_TOKEN" > /etc/kallon/hub-proxy.env
+  chmod 0640 /etc/kallon/hub-proxy.env
+  cat > /etc/systemd/system/kallon-tower-proxy.service <<EOF
+[Unit]
+Description=Kallon hub tower HTTP proxy (Artemis → wg0 → tower gateway)
+After=network-online.target wg-quick@wg0.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/kallon/hub-proxy.env
+Environment=HUB_PROXY_BIND=0.0.0.0
+Environment=HUB_PROXY_PORT=${HUB_PROXY_PORT}
+Environment=TOWER_GATEWAY_PORT=8766
+ExecStart=/usr/bin/python3 ${KALLON_DIR}/tower_proxy.py
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  systemctl daemon-reload
+  ok "tower proxy unit installed (port ${HUB_PROXY_PORT})"
+else
+  log "tower_proxy.py not found; skip kallon-tower-proxy (run ensure-tower-proxy later)."
+fi
+
 # 7. bring up WG + listener ----------------------------------------------------
 systemctl enable --now wg-quick@wg0 >/dev/null 2>&1 || die "wg-quick@wg0 failed"
 if [[ -f "$KALLON_DIR/alert_listener.py" ]]; then
   systemctl enable --now kallon-alert-listener.service >/dev/null 2>&1 \
     || log "alert listener not started (will start once wg0 is up)."
+fi
+if [[ -f "$KALLON_DIR/tower_proxy.py" ]]; then
+  systemctl enable --now kallon-tower-proxy.service >/dev/null 2>&1 \
+    || log "tower proxy not started."
 fi
 
 # 7b. Re-apply peer forwarding now wg0 exists (idempotent).
@@ -190,7 +248,9 @@ cat <<EOF
   "gateway_public_key": "${GW_PUB}",
   "vpn_subnet": "${VPN_SUBNET}",
   "gateway_ip": "${GATEWAY_IP}",
-  "alert_webhook_url": "http://${GATEWAY_IP}:${ALERT_PORT}/alerts"
+  "alert_webhook_url": "http://${GATEWAY_IP}:${ALERT_PORT}/alerts",
+  "hub_proxy_port": ${HUB_PROXY_PORT},
+  "hub_proxy_token_set": $([ -n "${HUB_PROXY_TOKEN}" ] && echo true || echo false)
 }
 EOF
 ok "gateway init complete for ${CUSTOMER_ID}"
