@@ -45,6 +45,20 @@ log = logging.getLogger("platform")
 
 router = APIRouter(prefix="/v1")
 
+# Shared outbound client — creating a new AsyncClient per request exhausts
+# sockets under dashboard poll + HLS segment load (esp. through ngrok).
+_http: Optional[httpx.AsyncClient] = None
+
+
+def _http_client() -> httpx.AsyncClient:
+    global _http
+    if _http is None or _http.is_closed:
+        _http = httpx.AsyncClient(
+            timeout=httpx.Timeout(connect=3.0, read=30.0, write=10.0, pool=5.0),
+            limits=httpx.Limits(max_connections=40, max_keepalive_connections=20),
+        )
+    return _http
+
 def _env_int(name: str, default: int) -> int:
     raw = os.environ.get(name, "").strip()
     if not raw:
@@ -447,10 +461,9 @@ async def _proxy(
         headers["X-Kallon-Hub-Proxy-Token"] = _hub_proxy_token()
         headers["X-Kallon-Tower-Vpn-Ip"] = vpn_ip
     try:
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            resp = await client.request(
-                method, f"{base}{path}", json=json_body, params=params, headers=headers,
-            )
+        resp = await _http_client().request(
+            method, f"{base}{path}", json=json_body, params=params, headers=headers, timeout=timeout,
+        )
     except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout, httpx.NetworkError) as exc:
         log.warning("tower %s unreachable at %s%s: %s", device_id, base, path, exc)
         return _err(
@@ -637,8 +650,7 @@ async def _proxy_hls(device_id: str, camera: int, asset: str) -> Response:
         "X-Kallon-Tower-Vpn-Ip": vpn_ip,
     }
     try:
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            resp = await client.get(url, headers=headers)
+        resp = await _http_client().get(url, headers=headers, timeout=timeout)
     except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout, httpx.NetworkError) as exc:
         log.warning("live %s cam%s unreachable at %s: %s", device_id, camera, url, exc)
         return _err(
