@@ -20,8 +20,11 @@ from typing import Optional
 REPO_ROOT = Path(__file__).resolve().parents[2]
 GATEWAY_INIT = REPO_ROOT / "scripts" / "kallon-gateway-init.sh"
 GATEWAY_ENSURE_FORWARDING = REPO_ROOT / "scripts" / "kallon-gateway-ensure-forwarding.sh"
+HUB_INSTALL_MEDIAMTX = REPO_ROOT / "scripts" / "kallon-hub-install-mediamtx.sh"
 ALERT_LISTENER = REPO_ROOT / "infra" / "hub" / "alert_listener.py"
 TOWER_PROXY = REPO_ROOT / "infra" / "hub" / "tower_proxy.py"
+HLS_PROXY = REPO_ROOT / "infra" / "hub" / "hls_proxy.py"
+MEDIAMTX_HUB_YML = REPO_ROOT / "infra" / "hub" / "mediamtx-hub.yml"
 
 
 @dataclass
@@ -152,19 +155,33 @@ def run_gateway_init(
         remote_cmd += f" --ops-ssh-pubkey-file /tmp/kallon-ops.pub"
     alert_listener_remote = "/tmp/infra/hub/alert_listener.py"
     tower_proxy_remote = "/tmp/infra/hub/tower_proxy.py"
+    hls_proxy_remote = "/tmp/infra/hub/hls_proxy.py"
+    mediamtx_yml_remote = "/tmp/infra/hub/mediamtx-hub.yml"
     if ALERT_LISTENER.exists():
         remote_cmd += f" --alert-listener-file {alert_listener_remote}"
     if TOWER_PROXY.exists():
         remote_cmd += f" --tower-proxy-file {tower_proxy_remote}"
+    if HLS_PROXY.exists():
+        remote_cmd += f" --hls-proxy-file {hls_proxy_remote}"
+    if MEDIAMTX_HUB_YML.exists():
+        remote_cmd += f" --mediamtx-yml-file {mediamtx_yml_remote}"
     if hub_proxy_token:
         remote_cmd += f" --hub-proxy-token {shlex.quote(hub_proxy_token)}"
     hub_proxy_port = os.environ.get("KALLON_HUB_PROXY_PORT", "8767").strip() or "8767"
     remote_cmd += f" --hub-proxy-port {shlex.quote(hub_proxy_port)}"
+    hub_hls_port = os.environ.get("KALLON_HUB_HLS_PORT", "8768").strip() or "8768"
+    remote_cmd += f" --hub-hls-port {shlex.quote(hub_hls_port)}"
 
     if dry_run:
         scp_files = [str(GATEWAY_INIT), str(ALERT_LISTENER)]
         if TOWER_PROXY.exists():
             scp_files.append(str(TOWER_PROXY))
+        if HLS_PROXY.exists():
+            scp_files.append(str(HLS_PROXY))
+        if MEDIAMTX_HUB_YML.exists():
+            scp_files.append(str(MEDIAMTX_HUB_YML))
+        if HUB_INSTALL_MEDIAMTX.exists():
+            scp_files.append(str(HUB_INSTALL_MEDIAMTX))
         if GATEWAY_ENSURE_FORWARDING.exists():
             scp_files.append(str(GATEWAY_ENSURE_FORWARDING))
         if ops_pubkey_file and Path(ops_pubkey_file).is_file():
@@ -177,20 +194,26 @@ def run_gateway_init(
             "would_run": remote_cmd.replace(hub_proxy_token, "***") if hub_proxy_token else remote_cmd,
             "gateway_endpoint": f"{public_endpoint}:51820",
             "hub_proxy_token_pushed": bool(hub_proxy_token),
+            "hub_hls_port": hub_hls_port,
         }
 
     # Stage the init script and listener, mirroring the repo layout the script
     # expects (../infra/hub/alert_listener.py relative to the script).
     _ssh = _ssh_base(host)
-    subprocess.run([*_ssh, "mkdir -p /tmp/infra/hub"], check=True, timeout=60)
+    subprocess.run([*_ssh, "mkdir -p /tmp/infra/hub /tmp/scripts"], check=True, timeout=60)
     _scp(host, GATEWAY_INIT, "/tmp/kallon-gateway-init.sh")
     if GATEWAY_ENSURE_FORWARDING.exists():
         _scp(host, GATEWAY_ENSURE_FORWARDING, "/tmp/kallon-gateway-ensure-forwarding.sh")
+    if HUB_INSTALL_MEDIAMTX.exists():
+        # gateway-init looks for kalon-hub-install next to itself under /tmp/
+        _scp(host, HUB_INSTALL_MEDIAMTX, "/tmp/kallon-hub-install-mediamtx.sh")
     if ops_pubkey_file and Path(ops_pubkey_file).is_file():
         _scp(host, Path(ops_pubkey_file), "/tmp/kallon-ops.pub")
     staged: list[str] = ["/tmp/kallon-gateway-init.sh"]
     if GATEWAY_ENSURE_FORWARDING.exists():
         staged.append("/tmp/kallon-gateway-ensure-forwarding.sh")
+    if HUB_INSTALL_MEDIAMTX.exists():
+        staged.append("/tmp/kallon-hub-install-mediamtx.sh")
     if ops_pubkey_file and Path(ops_pubkey_file).is_file():
         staged.append("/tmp/kallon-ops.pub")
     if ALERT_LISTENER.exists():
@@ -199,6 +222,12 @@ def run_gateway_init(
     if TOWER_PROXY.exists():
         _scp(host, TOWER_PROXY, tower_proxy_remote)
         staged.append(tower_proxy_remote)
+    if HLS_PROXY.exists():
+        _scp(host, HLS_PROXY, hls_proxy_remote)
+        staged.append(hls_proxy_remote)
+    if MEDIAMTX_HUB_YML.exists():
+        _scp(host, MEDIAMTX_HUB_YML, mediamtx_yml_remote)
+        staged.append(mediamtx_yml_remote)
     _strip_crlf_on_hub(host, *staged)
     proc = subprocess.run([*_ssh, remote_cmd], capture_output=True, text=True, timeout=600)
     if proc.returncode != 0:

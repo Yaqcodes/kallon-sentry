@@ -1,0 +1,34 @@
+###############################################
+# Kallon hub MediaMTX — RTSP remux → HLS
+#
+# Paths are created on demand by hls_proxy.py via the Control API.
+# RTSP publish is disabled; we only pull tower RTSP over wg0 and serve HLS
+# on loopback for the hub HLS agent (not public).
+###############################################
+
+logLevel: info
+logDestinations: [stdout]
+
+# Control API — loopback only (hls_proxy uses this to add paths).
+api: yes
+apiAddress: 127.0.0.1:9997
+
+# HLS for Artemis via hls_proxy (never bind public).
+hls: yes
+hlsAddress: 127.0.0.1:8888
+hlsAlwaysRemux: yes
+hlsVariant: lowLatency
+hlsSegmentCount: 7
+hlsSegmentDuration: 1s
+hlsPartDuration: 200ms
+hlsSegmentMaxSize: 50M
+hlsAllowOrigin: '*'
+
+# No public RTSP relay on the hub (NOC still uses tower :8554 over WG).
+rtsp: no
+rtmp: no
+webrtc: no
+srt: no
+
+# Empty — hls_proxy adds {device_id}_camN paths at runtime.
+paths: {}

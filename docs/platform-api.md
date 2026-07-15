@@ -11,6 +11,9 @@ control plane service (`infra/enrollment-api/`, FastAPI) and consists of:
   customer hub's public IP (`:8767`). The hub forwards over WireGuard to the
   tower gateway (`infra/tower-dashboard/gateway.py`, `:8766` on the tower VPN IP).
   Artemis does **not** join customer WireGuard meshes.
+- **Live video endpoints** — HLS playlists/segments from the hub HLS agent
+  (`:8768`) which remuxes tower RTSP via local MediaMTX. See
+  [`docs/customer-live-video.md`](customer-live-video.md).
 - **Alert endpoints** — hub-forwarded tower events for customer dashboards
   (ingest, history, SSE fan-out).
 - **Enrollment endpoints** — pre-existing first-boot flow (unchanged).
@@ -22,11 +25,8 @@ web dashboard is [`sentinel-dashboard`](https://github.com/olowu289/sentinel-das
 
 Machine-readable spec: `GET /openapi.json` on a running control plane.
 
-> **Auth status (July 2026):** no authentication is enforced yet — see
-> `planning/sdk-implementation-plan.md` §5.1. Clients SHOULD already send
-> `X-Kallon-Api-Key` so they need no changes when enforcement lands. Until
-> then, do not expose fleet/proxy routes beyond the ops network; only
-> `/v1/enroll*` may be public.
+> **Auth status (July 2026):** if `KALLON_PLATFORM_API_KEY` is set, clients must
+> send `X-Kallon-Api-Key` (or `?api_key=` for HLS media). Soft gate when unset.
 
 ### Browser dashboards (Vercel + CORS)
 
@@ -363,6 +363,45 @@ mediamtx unreachable:
 ```json
 {"available": false, "error": "URLError: timed out", "paths": []}
 ```
+
+---
+
+## 3b. Live video (HLS via hub remux)
+
+Full design + cutover: [`customer-live-video.md`](customer-live-video.md).
+
+Buyers play HLS from the **control plane** (not the hub). Artemis dials
+`http://{hub}:8768/hls/...` with the same `KALLON_HUB_PROXY_TOKEN` used for
+`:8767`.
+
+### GET /v1/towers/{device_id}/live
+
+```json
+{
+  "device_id": "kln_lab_000001",
+  "protocol": "hls",
+  "note": "Play hls_url with hls.js; pass api_key via xhrSetup or ?api_key=",
+  "cameras": [
+    {
+      "camera": 1,
+      "path": "cam1",
+      "ready": true,
+      "hls_url": "https://<control-plane>/v1/towers/kln_lab_000001/live/cam1/index.m3u8"
+    }
+  ]
+}
+```
+
+### GET /v1/towers/{device_id}/live/cam{n}/index.m3u8
+
+HLS playlist (`application/vnd.apple.mpegurl`). May return `503` with
+`stream_starting` while MediaMTX first pulls tower RTSP — clients should retry.
+
+### GET /v1/towers/{device_id}/live/cam{n}/{asset}
+
+Segments / fMP4 parts under the same auth as the playlist.
+
+Env: `KALLON_HUB_HLS_PORT` (default `8768`), `KALLON_LIVE_READ_TIMEOUT` (default `60`).
 
 ---
 

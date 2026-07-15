@@ -1,15 +1,16 @@
-"""Kallon Platform API router — fleet + tower proxy endpoints.
+"""Kallon Platform API router — fleet + tower proxy + live HLS endpoints.
 
 The SDK-facing surface documented in docs/platform-api.md and consumed by
 sentinel-sdk (https://github.com/Yaqcodes/sentinel-sdk). Included by app.main.
 
-Two endpoint families:
+Endpoint families:
 
   Fleet  — customers/towers straight from the registry (Postgres).
   Proxy  — PTZ / snapshot / status / streams forwarded over WireGuard to the
            tower gateway (infra/tower-dashboard/gateway.py) at
-           http://<tower-vpn-ip>:8766. SDK consumers never call a tower
-           directly; the control plane is the single base URL.
+           http://<tower-vpn-ip>:8766 via the hub tower-proxy (:8767).
+  Live   — HLS playlists/segments from hub MediaMTX remux (:8768) of tower
+           RTSP (:8554/camN). Buyers never dial hubs or towers directly.
 
 Error contract (platform endpoints only — enrollment keeps FastAPI "detail"):
 
@@ -17,10 +18,11 @@ Error contract (platform endpoints only — enrollment keeps FastAPI "detail"):
 
   404 not_found | 409 tower_not_enrolled | 422 invalid_request
   502 tower_error | 503 tower_offline | 503 registry_unavailable
+  503 stream_starting (HLS not ready yet — client should retry)
 
-Auth: NOT ENFORCED YET (recorded decision — planning/sdk-implementation-plan.md
-§5.1). If KALLON_PLATFORM_API_KEY is set, X-Kallon-Api-Key is required; when
-unset all requests pass. Do not expose these routes publicly until enforced.
+Auth: soft gate. If KALLON_PLATFORM_API_KEY is set, require X-Kallon-Api-Key
+or (for HLS media) ?api_key= — browsers/hls.js cannot always set custom
+headers on every segment request.
 """
 from __future__ import annotations
 
@@ -45,10 +47,12 @@ router = APIRouter(prefix="/v1")
 
 TOWER_GATEWAY_PORT = int(os.environ.get("KALLON_TOWER_GATEWAY_PORT", "8766"))
 HUB_PROXY_PORT = int(os.environ.get("KALLON_HUB_PROXY_PORT", "8767"))
+HUB_HLS_PORT = int(os.environ.get("KALLON_HUB_HLS_PORT", "8768"))
 HUB_PROXY_TOKEN = os.environ.get("KALLON_HUB_PROXY_TOKEN", "")
 PROXY_CONNECT_TIMEOUT = float(os.environ.get("KALLON_PROXY_CONNECT_TIMEOUT", "3"))
 PROXY_READ_TIMEOUT = float(os.environ.get("KALLON_PROXY_READ_TIMEOUT", "10"))
 SNAPSHOT_READ_TIMEOUT = float(os.environ.get("KALLON_SNAPSHOT_READ_TIMEOUT", "20"))
+LIVE_READ_TIMEOUT = float(os.environ.get("KALLON_LIVE_READ_TIMEOUT", "60"))
 PLATFORM_API_KEY = os.environ.get("KALLON_PLATFORM_API_KEY", "")
 
 # When true (default), Artemis dials the customer hub tower-proxy on the public
@@ -65,13 +69,16 @@ def _err(status: int, code: str, message: str, **context: Any) -> JSONResponse:
 
 
 def _auth_check(request: Request) -> Optional[JSONResponse]:
-    """Soft auth gate. Enforced only when KALLON_PLATFORM_API_KEY is set —
-    see the auth decision in planning/sdk-implementation-plan.md §5.1."""
+    """Soft auth gate. Enforced only when KALLON_PLATFORM_API_KEY is set.
+
+    Accepts X-Kallon-Api-Key header or ?api_key= query (needed for HLS / hls.js
+    / Safari native playback where custom headers are awkward or impossible).
+    """
     if not PLATFORM_API_KEY:
         return None
-    provided = request.headers.get("X-Kallon-Api-Key", "")
+    provided = request.headers.get("X-Kallon-Api-Key", "") or request.query_params.get("api_key", "")
     if provided != PLATFORM_API_KEY:
-        return _err(401, "unauthorized", "missing or invalid X-Kallon-Api-Key")
+        return _err(401, "unauthorized", "missing or invalid API key")
     return None
 
 
@@ -249,6 +256,46 @@ def _hub_host_from_endpoint(gateway_endpoint: Optional[str]) -> Optional[str]:
     return host or None
 
 
+def _resolve_tower_hub(
+    device_id: str,
+) -> tuple[Optional[Tower], Optional[str], Optional[str], Optional[JSONResponse]]:
+    """Return (tower, hub_host, vpn_ip, error)."""
+    reg = get_registry()
+    try:
+        tower = reg.get_tower(device_id)
+        if not tower.vpn_ip:
+            return None, None, None, _err(
+                409, "tower_not_enrolled",
+                f"tower {device_id} has no VPN IP yet (status={tower.status!r}); "
+                "it must complete first-boot enrollment before tower APIs work",
+                device_id=device_id,
+            )
+        try:
+            cust = reg.get_customer(tower.customer_id)
+        except NotFound:
+            return None, None, None, _err(
+                404, "not_found",
+                f"customer {tower.customer_id!r} missing for tower {device_id}",
+                device_id=device_id,
+            )
+        hub_host = _hub_host_from_endpoint(cust.gateway_endpoint)
+        if not hub_host:
+            return None, None, None, _err(
+                503, "hub_unreachable",
+                f"customer {tower.customer_id} has no gateway_endpoint; "
+                "provision the hub before tower proxy works",
+                device_id=device_id,
+            )
+        return tower, hub_host, tower.vpn_ip, None
+    except NotFound:
+        return None, None, None, _err(404, "not_found", f"unknown device_id {device_id!r}")
+    except RegistryError as e:
+        log.exception("registry error resolving tower %s", device_id)
+        return None, None, None, _err(503, "registry_unavailable", str(e))
+    finally:
+        reg.close()
+
+
 def _tower_proxy_target(
     device_id: str,
 ) -> tuple[Optional[str], Optional[str], Optional[JSONResponse]]:
@@ -259,50 +306,61 @@ def _tower_proxy_target(
     When direct (lab): base is ``http://{vpn_ip}:{tower_port}``.
     Paths appended by callers are tower-gateway paths (``/api/...``).
     """
-    reg = get_registry()
-    try:
-        tower = reg.get_tower(device_id)
-        if not tower.vpn_ip:
-            return None, None, _err(
-                409, "tower_not_enrolled",
-                f"tower {device_id} has no VPN IP yet (status={tower.status!r}); "
-                "it must complete first-boot enrollment before tower APIs work",
-                device_id=device_id,
-            )
-        if not PROXY_VIA_HUB:
-            return f"http://{tower.vpn_ip}:{TOWER_GATEWAY_PORT}", tower.vpn_ip, None
-
+    if not PROXY_VIA_HUB:
+        reg = get_registry()
         try:
-            cust = reg.get_customer(tower.customer_id)
+            tower = reg.get_tower(device_id)
+            if not tower.vpn_ip:
+                return None, None, _err(
+                    409, "tower_not_enrolled",
+                    f"tower {device_id} has no VPN IP yet (status={tower.status!r})",
+                    device_id=device_id,
+                )
+            return f"http://{tower.vpn_ip}:{TOWER_GATEWAY_PORT}", tower.vpn_ip, None
         except NotFound:
-            return None, None, _err(
-                404, "not_found",
-                f"customer {tower.customer_id!r} missing for tower {device_id}",
-                device_id=device_id,
-            )
-        hub_host = _hub_host_from_endpoint(cust.gateway_endpoint)
-        if not hub_host:
-            return None, None, _err(
-                503, "hub_unreachable",
-                f"customer {tower.customer_id} has no gateway_endpoint; "
-                "provision the hub before tower proxy works",
-                device_id=device_id,
-            )
-        if not HUB_PROXY_TOKEN:
-            return None, None, _err(
-                503, "hub_proxy_misconfigured",
-                "KALLON_HUB_PROXY_TOKEN is unset on the control plane",
-                device_id=device_id,
-            )
-        base = f"http://{hub_host}:{HUB_PROXY_PORT}/proxy/{device_id}"
-        return base, tower.vpn_ip, None
-    except NotFound:
-        return None, None, _err(404, "not_found", f"unknown device_id {device_id!r}")
-    except RegistryError as e:
-        log.exception("registry error resolving tower %s", device_id)
-        return None, None, _err(503, "registry_unavailable", str(e))
-    finally:
-        reg.close()
+            return None, None, _err(404, "not_found", f"unknown device_id {device_id!r}")
+        except RegistryError as e:
+            return None, None, _err(503, "registry_unavailable", str(e))
+        finally:
+            reg.close()
+
+    if not HUB_PROXY_TOKEN:
+        return None, None, _err(
+            503, "hub_proxy_misconfigured",
+            "KALLON_HUB_PROXY_TOKEN is unset on the control plane",
+            device_id=device_id,
+        )
+    _tower, hub_host, vpn_ip, err = _resolve_tower_hub(device_id)
+    if err is not None:
+        return None, None, err
+    assert hub_host is not None and vpn_ip is not None
+    base = f"http://{hub_host}:{HUB_PROXY_PORT}/proxy/{device_id}"
+    return base, vpn_ip, None
+
+
+def _hls_proxy_url(device_id: str, camera: int, asset: str) -> tuple[Optional[str], Optional[str], Optional[JSONResponse]]:
+    """Return (hub_hls_url, vpn_ip, error) for a live asset under camN."""
+    if camera < 1 or camera > 16:
+        return None, None, _err(
+            422, "invalid_request",
+            f"camera must be 1..16, got {camera}",
+            device_id=device_id,
+        )
+    if not HUB_PROXY_TOKEN:
+        return None, None, _err(
+            503, "hub_proxy_misconfigured",
+            "KALLON_HUB_PROXY_TOKEN is unset on the control plane",
+            device_id=device_id,
+        )
+    _tower, hub_host, vpn_ip, err = _resolve_tower_hub(device_id)
+    if err is not None:
+        return None, None, err
+    assert hub_host is not None and vpn_ip is not None
+    asset = asset.lstrip("/")
+    if not asset:
+        asset = "index.m3u8"
+    url = f"http://{hub_host}:{HUB_HLS_PORT}/hls/{device_id}/cam{camera}/{asset}"
+    return url, vpn_ip, None
 
 
 async def _proxy(
@@ -441,3 +499,117 @@ async def tower_recording_put(device_id: str, request: Request):
     return await _proxy(
         device_id, "PUT", "/api/recording", json_body=payload.model_dump()
     )
+
+
+# ── live HLS (hub MediaMTX remux) ────────────────────────────────────────────
+def _public_live_url(request: Request, device_id: str, camera: int, asset: str = "index.m3u8") -> str:
+    """Build an absolute Platform URL for a live asset (buyer-facing)."""
+    base = str(request.base_url).rstrip("/")
+    url = f"{base}/v1/towers/{device_id}/live/cam{camera}/{asset.lstrip('/')}"
+    # Only propagate query auth if the client already used it (so hls.js segment
+    # URLs stay consistent). Prefer X-Kallon-Api-Key via hls.js xhrSetup.
+    key = request.query_params.get("api_key")
+    if key:
+        sep = "&" if "?" in url else "?"
+        url = f"{url}{sep}api_key={key}"
+    return url
+
+
+@router.get("/towers/{device_id}/live", tags=["Live video"])
+async def live_catalog(device_id: str, request: Request):
+    """List HLS URLs for this tower (preferred entry for dashboards).
+
+    Camera count is taken from tower ``/api/streams`` when available; falls back
+    to cam1 only so the catalog still works while the tower is warming up.
+    """
+    if (resp := _auth_check(request)) is not None:
+        return resp
+
+    cameras: list[dict[str, Any]] = []
+    streams_resp = await _proxy(device_id, "GET", "/api/streams")
+    if streams_resp.status_code == 200:
+        try:
+            import json as _json
+            data = _json.loads(streams_resp.body)
+            paths = data.get("paths") or []
+            for p in paths:
+                name = str(p.get("name") or "")
+                if name.startswith("cam") and name[3:].isdigit():
+                    n = int(name[3:])
+                    cameras.append({
+                        "camera": n,
+                        "path": name,
+                        "ready": bool(p.get("ready")),
+                        "hls_url": _public_live_url(request, device_id, n),
+                    })
+        except Exception:  # noqa: BLE001
+            cameras = []
+
+    if not cameras:
+        cameras = [{
+            "camera": 1,
+            "path": "cam1",
+            "ready": None,
+            "hls_url": _public_live_url(request, device_id, 1),
+        }]
+
+    return {
+        "device_id": device_id,
+        "protocol": "hls",
+        "note": "Play hls_url with hls.js; pass api_key via xhrSetup or ?api_key=",
+        "cameras": cameras,
+    }
+
+
+async def _proxy_hls(device_id: str, camera: int, asset: str) -> Response:
+    url, vpn_ip, err = _hls_proxy_url(device_id, camera, asset)
+    if err is not None:
+        return err
+    assert url is not None and vpn_ip is not None
+    timeout = httpx.Timeout(connect=PROXY_CONNECT_TIMEOUT, read=LIVE_READ_TIMEOUT, write=10.0, pool=5.0)
+    headers = {
+        "X-Kallon-Hub-Proxy-Token": HUB_PROXY_TOKEN,
+        "X-Kallon-Tower-Vpn-Ip": vpn_ip,
+    }
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            resp = await client.get(url, headers=headers)
+    except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout, httpx.NetworkError) as exc:
+        log.warning("live %s cam%s unreachable at %s: %s", device_id, camera, url, exc)
+        return _err(
+            503, "tower_offline",
+            f"hub HLS unreachable ({exc.__class__.__name__}) — "
+            "hub agent down, Lightsail port 8768 closed, or tunnel cold",
+            device_id=device_id,
+        )
+
+    content_type = resp.headers.get("content-type", "application/octet-stream")
+    # Pass through hub JSON errors (stream_starting, etc.)
+    if content_type.startswith("application/json") and resp.status_code >= 400:
+        return Response(content=resp.content, status_code=resp.status_code, media_type=content_type)
+
+    return Response(
+        content=resp.content,
+        status_code=resp.status_code,
+        media_type=content_type,
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@router.get("/towers/{device_id}/live/cam{camera}/index.m3u8", tags=["Live video"])
+async def live_playlist(device_id: str, camera: int, request: Request):
+    """HLS master/media playlist for one camera (via hub MediaMTX remux)."""
+    if (resp := _auth_check(request)) is not None:
+        return resp
+    return await _proxy_hls(device_id, camera, "index.m3u8")
+
+
+@router.get("/towers/{device_id}/live/cam{camera}/{asset_path:path}", tags=["Live video"])
+async def live_asset(device_id: str, camera: int, asset_path: str, request: Request):
+    """HLS segments / init / partials for one camera."""
+    if (resp := _auth_check(request)) is not None:
+        return resp
+    # Avoid double-handling the playlist route when path is empty.
+    if not asset_path or asset_path == "index.m3u8":
+        return await _proxy_hls(device_id, camera, "index.m3u8")
+    return await _proxy_hls(device_id, camera, asset_path)

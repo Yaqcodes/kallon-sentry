@@ -33,9 +33,11 @@ os.environ.pop("KALLON_PLATFORM_API_KEY", None)
 
 MOCK_GATEWAY_PORT = 18766
 MOCK_HUB_PROXY_PORT = 18767
+MOCK_HUB_HLS_PORT = 18768
 HUB_TOKEN = "test-hub-proxy-token"
 os.environ["KALLON_TOWER_GATEWAY_PORT"] = str(MOCK_GATEWAY_PORT)
 os.environ["KALLON_HUB_PROXY_PORT"] = str(MOCK_HUB_PROXY_PORT)
+os.environ["KALLON_HUB_HLS_PORT"] = str(MOCK_HUB_HLS_PORT)
 os.environ["KALLON_HUB_PROXY_TOKEN"] = HUB_TOKEN
 os.environ["KALLON_PROXY_VIA_HUB"] = "1"
 
@@ -46,6 +48,12 @@ FAKE_JPEG = b"\xff\xd8\xff\xe0" + b"J" * 64 + b"\xff\xd9"
 
 # Captured by hub mock for assertions
 LAST_HUB_HEADERS: dict[str, str] = {}
+LAST_HLS_HEADERS: dict[str, str] = {}
+FAKE_M3U8 = (
+    b"#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:2\n"
+    b"#EXTINF:2.0,\nseg0.ts\n#EXT-X-ENDLIST\n"
+)
+FAKE_TS = b"\x00\x00\x01\xba" + b"T" * 64
 
 
 class MockGateway(BaseHTTPRequestHandler):
@@ -161,6 +169,46 @@ class MockHubProxy(BaseHTTPRequestHandler):
         pass
 
 
+class MockHubHls(BaseHTTPRequestHandler):
+    """Mimics infra/hub/hls_proxy.py — auth then serve fake HLS."""
+
+    def _reply(self, code: int, body: bytes, content_type: str = "application/json") -> None:
+        self.send_response(code)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self) -> None:  # noqa: N802
+        global LAST_HLS_HEADERS
+        LAST_HLS_HEADERS = {
+            "token": self.headers.get("X-Kallon-Hub-Proxy-Token", ""),
+            "vpn_ip": self.headers.get("X-Kallon-Tower-Vpn-Ip", ""),
+        }
+        if LAST_HLS_HEADERS["token"] != HUB_TOKEN:
+            self._reply(401, json.dumps({"error": {"code": "unauthorized", "message": "bad token"}}).encode())
+            return
+        path = self.path.split("?", 1)[0]
+        if path == "/healthz":
+            self._reply(200, b'{"status":"ok","mediamtx":true}')
+            return
+        # /hls/{device_id}/cam1/index.m3u8
+        parts = path.strip("/").split("/")
+        if len(parts) < 4 or parts[0] != "hls":
+            self._reply(404, json.dumps({"error": {"code": "not_found", "message": path}}).encode())
+            return
+        asset = parts[3] if len(parts) > 3 else "index.m3u8"
+        if asset.endswith(".m3u8"):
+            self._reply(200, FAKE_M3U8, "application/vnd.apple.mpegurl")
+        elif asset.endswith(".ts"):
+            self._reply(200, FAKE_TS, "video/mp2t")
+        else:
+            self._reply(404, json.dumps({"error": {"code": "not_found", "message": asset}}).encode())
+
+    def log_message(self, *args) -> None:
+        pass
+
+
 def seed() -> dict:
     reg = get_registry()
     reg.create_customer(Customer(
@@ -194,8 +242,10 @@ def main() -> int:
     seed()
     gateway = ThreadingHTTPServer(("127.0.0.1", MOCK_GATEWAY_PORT), MockGateway)
     hub = ThreadingHTTPServer(("127.0.0.1", MOCK_HUB_PROXY_PORT), MockHubProxy)
+    hls = ThreadingHTTPServer(("127.0.0.1", MOCK_HUB_HLS_PORT), MockHubHls)
     threading.Thread(target=gateway.serve_forever, daemon=True).start()
     threading.Thread(target=hub.serve_forever, daemon=True).start()
+    threading.Thread(target=hls.serve_forever, daemon=True).start()
 
     from fastapi.testclient import TestClient
     from app.main import app  # type: ignore
@@ -273,6 +323,23 @@ def main() -> int:
 
     r = client.get(f"/v1/towers/{d1}/snapshot/cam9")
     check(r.status_code == 404, "snapshot bad camera passthrough 404")
+
+    # ── live HLS via hub agent ───────────────────────────────────────────────
+    r = client.get(f"/v1/towers/{d1}/live")
+    check(r.status_code == 200 and r.json()["protocol"] == "hls", "live catalog")
+    check(r.json()["cameras"][0]["hls_url"].endswith("/live/cam1/index.m3u8"),
+          "live catalog hls_url")
+
+    r = client.get(f"/v1/towers/{d1}/live/cam1/index.m3u8")
+    check(r.status_code == 200 and b"#EXTM3U" in r.content, "live playlist via hub")
+    check(LAST_HLS_HEADERS.get("token") == HUB_TOKEN, "hls hub received token")
+    check(LAST_HLS_HEADERS.get("vpn_ip") == "127.0.0.1", "hls hub received vpn ip")
+
+    r = client.get(f"/v1/towers/{d1}/live/cam1/seg0.ts")
+    check(r.status_code == 200 and r.content == FAKE_TS, "live segment via hub")
+
+    r = client.get(f"/v1/towers/{d1}/live/cam99/index.m3u8")
+    check(r.status_code == 422, "live bad camera 422")
 
     # ── tower proxy: failure contracts ──────────────────────────────────────
     r = client.get(f"/v1/towers/{d2}/status")

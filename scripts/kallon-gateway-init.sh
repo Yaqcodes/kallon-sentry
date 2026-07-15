@@ -22,7 +22,10 @@ ALERT_LISTENER_FILE=""
 ALERT_PORT=8080
 HUB_PROXY_PORT=8767
 HUB_PROXY_TOKEN="${HUB_PROXY_TOKEN:-}"
+HUB_HLS_PORT=8768
 TOWER_PROXY_FILE=""
+HLS_PROXY_FILE=""
+MEDIAMTX_YML_FILE=""
 KALLON_DIR=/opt/kallon-hub
 
 log() { printf '\033[0;36m[gw-init] %s\033[0m\n' "$*" >&2; }
@@ -42,7 +45,10 @@ while [[ $# -gt 0 ]]; do
     --ops-ssh-user)        OPS_SSH_USER="$2"; shift 2 ;;
     --alert-listener-file) ALERT_LISTENER_FILE="$2"; shift 2 ;;
     --tower-proxy-file)    TOWER_PROXY_FILE="$2"; shift 2 ;;
+    --hls-proxy-file)      HLS_PROXY_FILE="$2"; shift 2 ;;
+    --mediamtx-yml-file)   MEDIAMTX_YML_FILE="$2"; shift 2 ;;
     --hub-proxy-port)      HUB_PROXY_PORT="$2"; shift 2 ;;
+    --hub-hls-port)        HUB_HLS_PORT="$2"; shift 2 ;;
     --hub-proxy-token)     HUB_PROXY_TOKEN="$2"; shift 2 ;;
     *) die "unknown arg: $1" ;;
   esac
@@ -125,11 +131,13 @@ ufw allow "${LISTEN_PORT}/udp" >/dev/null
 ufw allow from "$VPN_SUBNET" to any port "$ALERT_PORT" proto tcp >/dev/null
 # Tower HTTP proxy for Artemis Platform API (token-auth; not VPN-restricted).
 ufw allow "${HUB_PROXY_PORT}/tcp" >/dev/null
+# Hub HLS remux proxy for Artemis live video (token-auth; not VPN-restricted).
+ufw allow "${HUB_HLS_PORT}/tcp" >/dev/null
 # Hub-and-spoke: NOC/dashboard peers reach tower peers (RTSP :8554, SSH, etc.)
 # over the VPN. ip_forward alone is not enough — UFW drops FORWARD by default.
 ufw route allow in on wg0 out on wg0 >/dev/null
 ufw --force enable >/dev/null
-ok "ufw: ${LISTEN_PORT}/udp; ${ALERT_PORT}/tcp from ${VPN_SUBNET}; ${HUB_PROXY_PORT}/tcp; wg0 peer forwarding"
+ok "ufw: ${LISTEN_PORT}/udp; ${ALERT_PORT}/tcp from ${VPN_SUBNET}; ${HUB_PROXY_PORT}/tcp; ${HUB_HLS_PORT}/tcp; wg0 peer forwarding"
 
 # 6. alert listener (systemd) --------------------------------------------------
 install -d -m 0750 /etc/kallon
@@ -219,6 +227,69 @@ else
   log "tower_proxy.py not found; skip kallon-tower-proxy (run ensure-tower-proxy later)."
 fi
 
+# 6c. hub MediaMTX + HLS proxy (Artemis live video) ---------------------------
+_hls_src=""
+if [[ -n "$HLS_PROXY_FILE" && -f "$HLS_PROXY_FILE" ]]; then
+  _hls_src="$HLS_PROXY_FILE"
+else
+  for _c in "$(dirname "$0")/infra/hub/hls_proxy.py" \
+            "$(dirname "$0")/../infra/hub/hls_proxy.py"; do
+    [[ -f "$_c" ]] && { _hls_src="$_c"; break; }
+  done
+fi
+_mtx_yml=""
+if [[ -n "$MEDIAMTX_YML_FILE" && -f "$MEDIAMTX_YML_FILE" ]]; then
+  _mtx_yml="$MEDIAMTX_YML_FILE"
+else
+  for _c in "$(dirname "$0")/infra/hub/mediamtx-hub.yml" \
+            "$(dirname "$0")/../infra/hub/mediamtx-hub.yml"; do
+    [[ -f "$_c" ]] && { _mtx_yml="$_c"; break; }
+  done
+fi
+_mtx_installer="$(dirname "$0")/kallon-hub-install-mediamtx.sh"
+if [[ ! -f "$_mtx_installer" ]]; then
+  _mtx_installer="$(dirname "$0")/../scripts/kallon-hub-install-mediamtx.sh"
+fi
+if [[ -n "$_hls_src" && -n "$_mtx_yml" && -f "$_mtx_installer" ]]; then
+  if [[ -z "$HUB_PROXY_TOKEN" ]]; then
+    HUB_PROXY_TOKEN="$(head -c 24 /dev/urandom | base64 | tr -d '\n/=+')"
+    log "generated HUB_PROXY_TOKEN for HLS (copy to Artemis KALLON_HUB_PROXY_TOKEN)"
+  fi
+  install -d -m 0750 /etc/kallon
+  umask 027
+  printf 'HUB_PROXY_TOKEN=%s\n' "$HUB_PROXY_TOKEN" > /etc/kallon/hub-proxy.env
+  chmod 0640 /etc/kallon/hub-proxy.env
+  MEDIAMTX_YML_SRC="$_mtx_yml" KALLON_DIR="$KALLON_DIR" bash "$_mtx_installer"
+  install -m 0755 "$_hls_src" "$KALLON_DIR/hls_proxy.py"
+  cat > /etc/systemd/system/kallon-hls-proxy.service <<EOF
+[Unit]
+Description=Kallon hub HLS proxy (Artemis → MediaMTX ← tower RTSP over wg0)
+After=network-online.target kallon-hub-mediamtx.service wg-quick@wg0.service
+Wants=network-online.target kallon-hub-mediamtx.service
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/kallon/hub-proxy.env
+Environment=HUB_HLS_BIND=0.0.0.0
+Environment=HUB_HLS_PORT=${HUB_HLS_PORT}
+Environment=MEDIAMTX_API=http://127.0.0.1:9997
+Environment=MEDIAMTX_HLS=http://127.0.0.1:8888
+Environment=TOWER_RTSP_PORT=8554
+ExecStart=/usr/bin/python3 ${KALLON_DIR}/hls_proxy.py
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  systemctl daemon-reload
+  ok "HLS proxy unit installed (port ${HUB_HLS_PORT})"
+else
+  log "hls_proxy / mediamtx-hub.yml / install script missing; skip HLS (run ensure-hls later)."
+fi
+
 # 7. bring up WG + listener ----------------------------------------------------
 systemctl enable --now wg-quick@wg0 >/dev/null 2>&1 || die "wg-quick@wg0 failed"
 if [[ -f "$KALLON_DIR/alert_listener.py" ]]; then
@@ -228,6 +299,11 @@ fi
 if [[ -f "$KALLON_DIR/tower_proxy.py" ]]; then
   systemctl enable --now kallon-tower-proxy.service >/dev/null 2>&1 \
     || log "tower proxy not started."
+fi
+if [[ -f "$KALLON_DIR/hls_proxy.py" ]]; then
+  systemctl enable --now kallon-hub-mediamtx.service >/dev/null 2>&1 || true
+  systemctl enable --now kallon-hls-proxy.service >/dev/null 2>&1 \
+    || log "hls proxy not started."
 fi
 
 # 7b. Re-apply peer forwarding now wg0 exists (idempotent).
@@ -250,6 +326,7 @@ cat <<EOF
   "gateway_ip": "${GATEWAY_IP}",
   "alert_webhook_url": "http://${GATEWAY_IP}:${ALERT_PORT}/alerts",
   "hub_proxy_port": ${HUB_PROXY_PORT},
+  "hub_hls_port": ${HUB_HLS_PORT},
   "hub_proxy_token_set": $([ -n "${HUB_PROXY_TOKEN}" ] && echo true || echo false)
 }
 EOF

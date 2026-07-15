@@ -7,11 +7,12 @@
 | 22 | TCP | SSH (ops) |
 | 51820 | UDP | WireGuard |
 | 8767 | TCP | Hub tower-proxy (Artemis Platform API) — from `KALLON_HUB_PROXY_PORT` |
+| 8768 | TCP | Hub HLS remux proxy (live video) — from `KALLON_HUB_HLS_PORT` |
 
 UFW on the VM is opened by `kallon-gateway-init.sh`; **Lightsail firewall is
 separate** and must be set via this API (or the console).
 
-**Existing hubs** (created before 8767 was automated):
+**Existing hubs** (created before 8767/8768 was automated):
 
 ```powershell
 cd C:\Users\Artemis\Documents\kallon-sentry
@@ -20,7 +21,9 @@ python infra/hub-provisioner/sync_lightsail_ports.py kallon-hub-cust_lab --regio
 ```
 
 **Manual (`--provider manual`) hubs:** provisioner cannot touch cloud firewall —
-open TCP 8767 (+ UDP 51820 if missing) in the provider console yourself.
+open TCP 8767 + 8768 (+ UDP 51820 if missing) in the provider console yourself.
+
+Live video cutover (MediaMTX + HLS agent): see [`customer-live-video.md`](customer-live-video.md).
 
 ## Production: new hubs (automated)
 
@@ -28,15 +31,16 @@ Ops sets **once** on Artemis in `enrollment-api.env`:
 
 ```env
 KALLON_HUB_PROXY_PORT=8767
+KALLON_HUB_HLS_PORT=8768
 KALLON_HUB_PROXY_TOKEN=<fleet-wide-secret>
 KALLON_PROXY_VIA_HUB=1
 ```
 
 `fulfill-order` / hub-provisioner then:
 
-1. SCPs `infra/hub/tower_proxy.py` to the new host
-2. Runs `kallon-gateway-init.sh --hub-proxy-token "$KALLON_HUB_PROXY_TOKEN" --tower-proxy-file ...`
-3. Hub writes `/etc/kallon/hub-proxy.env` and enables `kallon-tower-proxy`
+1. SCPs `tower_proxy.py`, `hls_proxy.py`, `mediamtx-hub.yml`, install scripts
+2. Runs `kallon-gateway-init.sh` with hub proxy token + HLS ports
+3. Hub enables `kallon-tower-proxy`, `kallon-hub-mediamtx`, `kallon-hls-proxy`
 
 No copy-back to Artemis — Artemis already has the source of truth. Provisioning
 **fails** if `KALLON_PROXY_VIA_HUB=1` and the token is unset.
