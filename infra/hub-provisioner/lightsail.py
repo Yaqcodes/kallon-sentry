@@ -1,13 +1,15 @@
 """AWS Lightsail HubProvider (default Option B adapter).
 
-Creates a small Ubuntu Lightsail instance, opens UDP 51820, waits for SSH, and
-returns its static/public IP. Bring-up is the shared run_gateway_init().
+Creates a small Ubuntu Lightsail instance, opens UDP 51820 (WireGuard) and
+TCP 8767 (hub tower-proxy for Artemis), waits for SSH, and returns its
+static/public IP. Bring-up is the shared run_gateway_init().
 
 Requires boto3 + AWS credentials (e.g. an ops IAM user with Lightsail rights).
 This is the only place AWS appears — the rest of the stack is provider-agnostic.
 """
 from __future__ import annotations
 
+import os
 import time
 
 try:
@@ -67,12 +69,16 @@ class LightsailProvider(HubProvider):
         if not public_ip:
             raise RuntimeError(f"Lightsail instance {instance_name} not running in time")
 
-        # Open WireGuard UDP 51820 (SSH 22 is open by default).
+        # Open SSH + WireGuard + Artemis hub tower-proxy.
+        # put_instance_public_ports REPLACES the full public port set for the
+        # instance — always include all required ports in one call.
+        hub_proxy_port = int(os.environ.get("KALLON_HUB_PROXY_PORT", "8767") or "8767")
         ls.put_instance_public_ports(
             instanceName=instance_name,
             portInfos=[
                 {"fromPort": 22, "toPort": 22, "protocol": "tcp"},
                 {"fromPort": 51820, "toPort": 51820, "protocol": "udp"},
+                {"fromPort": hub_proxy_port, "toPort": hub_proxy_port, "protocol": "tcp"},
             ],
         )
 

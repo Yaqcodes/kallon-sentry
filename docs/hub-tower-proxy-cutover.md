@@ -1,3 +1,27 @@
+## Lightsail public ports (automation)
+
+`LightsailProvider.provision()` calls `put_instance_public_ports` with:
+
+| Port | Proto | Purpose |
+|------|-------|---------|
+| 22 | TCP | SSH (ops) |
+| 51820 | UDP | WireGuard |
+| 8767 | TCP | Hub tower-proxy (Artemis Platform API) — from `KALLON_HUB_PROXY_PORT` |
+
+UFW on the VM is opened by `kallon-gateway-init.sh`; **Lightsail firewall is
+separate** and must be set via this API (or the console).
+
+**Existing hubs** (created before 8767 was automated):
+
+```powershell
+cd C:\Users\Artemis\Documents\kallon-sentry
+python infra/hub-provisioner/sync_lightsail_ports.py kallon-hub-cust_lab --region us-east-2
+# instance name = Lightsail name; often kallon-hub-<customer_id>
+```
+
+**Manual (`--provider manual`) hubs:** provisioner cannot touch cloud firewall —
+open TCP 8767 (+ UDP 51820 if missing) in the provider console yourself.
+
 ## Production: new hubs (automated)
 
 Ops sets **once** on Artemis in `enrollment-api.env`:
