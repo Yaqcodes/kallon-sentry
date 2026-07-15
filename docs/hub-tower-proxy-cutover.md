@@ -1,8 +1,25 @@
-# Lab cutover — hub-mediated tower proxy
+## Production: new hubs (automated)
 
-Run on **Artemis** + **lab hub** + **tower** after merging `sentinel-customer`
-(or current branch with this feature). Artemis must **not** need WireGuard
-membership for Platform API PTZ/status/snapshots.
+Ops sets **once** on Artemis in `enrollment-api.env`:
+
+```env
+KALLON_HUB_PROXY_PORT=8767
+KALLON_HUB_PROXY_TOKEN=<fleet-wide-secret>
+KALLON_PROXY_VIA_HUB=1
+```
+
+`fulfill-order` / hub-provisioner then:
+
+1. SCPs `infra/hub/tower_proxy.py` to the new host
+2. Runs `kallon-gateway-init.sh --hub-proxy-token "$KALLON_HUB_PROXY_TOKEN" --tower-proxy-file ...`
+3. Hub writes `/etc/kallon/hub-proxy.env` and enables `kallon-tower-proxy`
+
+No copy-back to Artemis — Artemis already has the source of truth. Provisioning
+**fails** if `KALLON_PROXY_VIA_HUB=1` and the token is unset.
+
+## Lab cutover — existing hub (manual)
+
+Run on **Artemis** + **lab hub** + **tower** after merging code. Artemis must **not** need WireGuard for Platform API PTZ/status/snapshots.
 
 ## 1. Hub (lab VPS)
 

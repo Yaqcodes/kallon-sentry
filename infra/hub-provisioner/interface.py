@@ -21,6 +21,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 GATEWAY_INIT = REPO_ROOT / "scripts" / "kallon-gateway-init.sh"
 GATEWAY_ENSURE_FORWARDING = REPO_ROOT / "scripts" / "kallon-gateway-ensure-forwarding.sh"
 ALERT_LISTENER = REPO_ROOT / "infra" / "hub" / "alert_listener.py"
+TOWER_PROXY = REPO_ROOT / "infra" / "hub" / "tower_proxy.py"
 
 
 @dataclass
@@ -119,10 +120,27 @@ def run_gateway_init(
     public_endpoint: Optional[str] = None,
     dry_run: bool = False,
 ) -> dict:
-    """Copy + run kallon-gateway-init.sh on the hub; return the manifest dict."""
+    """Copy + run kallon-gateway-init.sh on the hub; return the manifest dict.
+
+    Pushes Artemis ``KALLON_HUB_PROXY_TOKEN`` onto the hub (same value every
+    customer) and installs ``tower_proxy.py`` so Platform API can dial the hub
+    without joining the customer VPN. Set ``KALLON_PROXY_VIA_HUB=0`` to skip
+    requiring the token (lab Artemis-as-NOC-peer only).
+    """
     public_endpoint = public_endpoint or host.public_ip
     ops_pubkey_file = os.environ.get("KALLON_OPS_SSH_PUBKEY_FILE", "").strip()
     ops_user = os.environ.get("KALLON_OPS_SSH_USER", host.ssh_user)
+    hub_proxy_token = os.environ.get("KALLON_HUB_PROXY_TOKEN", "").strip()
+    proxy_via_hub = os.environ.get("KALLON_PROXY_VIA_HUB", "1").strip().lower() not in (
+        "0", "false", "no", "off",
+    )
+    if proxy_via_hub and not hub_proxy_token:
+        raise RuntimeError(
+            "KALLON_HUB_PROXY_TOKEN is unset — required to install the hub tower-proxy. "
+            "Set it once in enrollment-api.env (same value stamped on every new hub), "
+            "or set KALLON_PROXY_VIA_HUB=0 for lab-only Artemis-on-VPN."
+        )
+
     remote_cmd = (
         f"sudo bash /tmp/kallon-gateway-init.sh "
         f"--customer-id {shlex.quote(customer_id)} "
@@ -133,10 +151,20 @@ def run_gateway_init(
     if ops_pubkey_file and Path(ops_pubkey_file).is_file():
         remote_cmd += f" --ops-ssh-pubkey-file /tmp/kallon-ops.pub"
     alert_listener_remote = "/tmp/infra/hub/alert_listener.py"
+    tower_proxy_remote = "/tmp/infra/hub/tower_proxy.py"
     if ALERT_LISTENER.exists():
         remote_cmd += f" --alert-listener-file {alert_listener_remote}"
+    if TOWER_PROXY.exists():
+        remote_cmd += f" --tower-proxy-file {tower_proxy_remote}"
+    if hub_proxy_token:
+        remote_cmd += f" --hub-proxy-token {shlex.quote(hub_proxy_token)}"
+    hub_proxy_port = os.environ.get("KALLON_HUB_PROXY_PORT", "8767").strip() or "8767"
+    remote_cmd += f" --hub-proxy-port {shlex.quote(hub_proxy_port)}"
+
     if dry_run:
         scp_files = [str(GATEWAY_INIT), str(ALERT_LISTENER)]
+        if TOWER_PROXY.exists():
+            scp_files.append(str(TOWER_PROXY))
         if GATEWAY_ENSURE_FORWARDING.exists():
             scp_files.append(str(GATEWAY_ENSURE_FORWARDING))
         if ops_pubkey_file and Path(ops_pubkey_file).is_file():
@@ -146,8 +174,9 @@ def run_gateway_init(
             "customer_id": customer_id,
             "vpn_subnet": vpn_subnet,
             "would_scp": scp_files,
-            "would_run": remote_cmd,
+            "would_run": remote_cmd.replace(hub_proxy_token, "***") if hub_proxy_token else remote_cmd,
             "gateway_endpoint": f"{public_endpoint}:51820",
+            "hub_proxy_token_pushed": bool(hub_proxy_token),
         }
 
     # Stage the init script and listener, mirroring the repo layout the script
@@ -167,6 +196,9 @@ def run_gateway_init(
     if ALERT_LISTENER.exists():
         _scp(host, ALERT_LISTENER, alert_listener_remote)
         staged.append(alert_listener_remote)
+    if TOWER_PROXY.exists():
+        _scp(host, TOWER_PROXY, tower_proxy_remote)
+        staged.append(tower_proxy_remote)
     _strip_crlf_on_hub(host, *staged)
     proc = subprocess.run([*_ssh, remote_cmd], capture_output=True, text=True, timeout=600)
     if proc.returncode != 0:

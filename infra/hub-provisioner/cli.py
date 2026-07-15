@@ -7,9 +7,13 @@ the shared gateway bring-up together:
      set status=pending_hub.
   2. provider.provision() → a reachable Ubuntu host (Option B creates a VM;
      Option C verifies an existing host).
-  3. run_gateway_init() copies + runs kallon-gateway-init.sh → manifest.
+  3. run_gateway_init() copies + runs kallon-gateway-init.sh → manifest
+     (also installs tower_proxy with KALLON_HUB_PROXY_TOKEN from Artemis env).
   4. Update the registry (gateway endpoint/pubkey/alert URL/host id, status=active)
      and write gateway_manifest.json (Terra-internal; never sent to the buyer).
+
+Requires ``KALLON_HUB_PROXY_TOKEN`` in the environment / enrollment-api.env when
+``KALLON_PROXY_VIA_HUB`` is enabled (default).
 
 Examples:
   python infra/hub-provisioner/cli.py cust_lab --provider manual \
