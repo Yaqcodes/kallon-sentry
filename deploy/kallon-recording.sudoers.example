@@ -1,0 +1,9 @@
+# Installed by scripts/install/50-mediamtx.sh as
+# /etc/sudoers.d/kallon-recording (mode 0440).
+#
+# Lets the tower dashboard RUNTIME_USER persist RECORD_ENABLE / mediamtx.yml
+# without an interactive password. Constrained to one binary.
+# (Module 20 may also grant broader NOPASSWD for the same user on bench images.)
+
+Defaults!/usr/local/sbin/kallon-apply-recording !requiretty
+__RUNTIME_USER__ ALL=(root) NOPASSWD: /usr/local/sbin/kallon-apply-recording

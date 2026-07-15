@@ -60,56 +60,50 @@ resolve_record_env() {
   fi
 }
 
-# Pick the best writable path for recordings: prefer RECORD_PATH when it is a
-# mountpoint, else auto-detect an NVMe SSD (even if the desktop mounted it under
-# /media/... instead of /var/kallon/recordings).
+# Canonical recordings path. mediamtx ALWAYS uses this path — never /media/...
+# NVMe detection / reclaim / fstab is handled by kallon-ensure-recordings-mount
+# (run at install time and again on every boot via systemd).
 resolve_record_path() {
   default_var RECORD_PATH /var/kallon/recordings
+  # Operators may set RECORD_PATH in device.env, but keep it a single fixed
+  # location so dashboards / operators always know where segments live.
+  export RECORD_PATH
+}
 
-  if mountpoint -q "${RECORD_PATH}" 2>/dev/null; then
-    ok "recording path ${RECORD_PATH} is a mountpoint"
-    return
+install_recordings_mount_helper() {
+  local src="$REPO_DIR/scripts/kallon-ensure-recordings-mount.sh"
+  local dst=/usr/local/sbin/kallon-ensure-recordings-mount
+  [[ -f "$src" ]] || die "missing $src"
+  install_if_changed "$src" "$dst" 0755 root root || true
+  install_if_changed \
+    "$REPO_DIR/deploy/kallon-recordings-mount.service.example" \
+    /etc/systemd/system/kallon-recordings-mount.service \
+    0644 root root || true
+  systemctl daemon-reload
+  systemctl enable kallon-recordings-mount.service >/dev/null 2>&1 || true
+}
+
+# Mount (or confirm) the SSD at RECORD_PATH before rendering mediamtx.yml.
+ensure_recordings_volume() {
+  resolve_record_path
+  if [[ "${RECORD_ENABLE}" != "1" ]]; then
+    return 0
   fi
-
-  # Try mounting the labelled Kallon recording partition at the canonical path.
-  if command -v blkid >/dev/null 2>&1; then
-    local dev=""
-    dev="$(blkid -L kallon-rec 2>/dev/null || true)"
-    if [[ -n "$dev" && -b "$dev" ]]; then
-      ensure_dir "${RECORD_PATH}" 0755 root root
-      if mount "$dev" "${RECORD_PATH}" 2>/dev/null; then
-        ok "mounted ${dev} (LABEL=kallon-rec) at ${RECORD_PATH}"
-        return
-      fi
-      warn "found ${dev} (LABEL=kallon-rec) but mount to ${RECORD_PATH} failed — scanning existing mounts"
-    fi
+  install_recordings_mount_helper
+  if /usr/local/sbin/kallon-ensure-recordings-mount; then
+    ok "recordings volume ready at ${RECORD_PATH}"
+  else
+    warn "kallon-ensure-recordings-mount failed — mediamtx may write on the OS disk"
   fi
-
-  # SSD already mounted elsewhere (e.g. GNOME "Other Locations") — use that path.
-  local best="" best_avail=0 line dev mnt fstype avail_kb
-  while IFS= read -r line; do
-    dev="${line%% *}"
-  [[ "$dev" == /dev/nvme* ]] || continue
-    mnt="$(awk '{print $2}' <<<"$line")"
-    fstype="$(awk '{print $3}' <<<"$line")"
-    [[ "$fstype" =~ ^(ext4|xfs|btrfs)$ ]] || continue
-    [[ -d "$mnt" && -w "$mnt" ]] || continue
-    avail_kb="$(df -Pk "$mnt" 2>/dev/null | awk 'NR==2{print $4}')"
-    avail_kb="${avail_kb:-0}"
-    if (( avail_kb > best_avail )); then
-      best_avail=$avail_kb
-      best="$mnt"
-    fi
-  done < <(grep -E '^/dev/nvme' /proc/mounts 2>/dev/null || true)
-
-  if [[ -n "$best" ]]; then
-    RECORD_PATH="$best"
-    export RECORD_PATH
-    ok "auto-selected NVMe recording path: ${RECORD_PATH} (not at canonical mount — update fstab if you want /var/kallon/recordings)"
-    return
+  local src
+  src="$(findmnt -n -o SOURCE --target "${RECORD_PATH}" 2>/dev/null || true)"
+  if [[ "$src" == /dev/nvme* ]]; then
+    ok "recordings backed by NVMe (${src})"
+  elif findmnt -n -o SOURCE / 2>/dev/null | grep -q '^/dev/nvme'; then
+    ok "OS root is NVMe — recordings on ${RECORD_PATH} are on SSD"
+  else
+    warn "RECORD_ENABLE=1 but ${RECORD_PATH} is not on NVMe (source=${src:-unknown}) — check SSD / LABEL=kallon-rec"
   fi
-
-  warn "RECORD_ENABLE=1 but no NVMe mount found — recordings will land on ${RECORD_PATH} (OS partition unless you mount SSD there)"
 }
 
 render_yml() {
@@ -182,7 +176,7 @@ main() {
   require_root
   load_env
   default_var RECORD_ENABLE 0
-  resolve_record_path
+  ensure_recordings_volume
   install_binary
   render_yml
   if [[ "${RECORD_ENABLE}" == "1" ]]; then
@@ -195,8 +189,13 @@ main() {
   # Restart only when the binary, rendered config, or unit actually changed, so
   # re-running the module never drops a live RTSP stream for nothing.
   local changed=0
-  if inputs_changed mediamtx "$MEDIAMTX_BIN" "$MEDIAMTX_YML" /etc/systemd/system/mediamtx.service; then
+  if inputs_changed mediamtx "$MEDIAMTX_BIN" "$MEDIAMTX_YML" /etc/systemd/system/mediamtx.service \
+       /etc/systemd/system/kallon-recordings-mount.service \
+       /usr/local/sbin/kallon-ensure-recordings-mount; then
     changed=1
+  fi
+  if [[ "${RECORD_ENABLE}" == "1" ]]; then
+    apply_service_change 1 kallon-recordings-mount.service
   fi
   apply_service_change "$changed" mediamtx.service
   ok "mediamtx module complete"

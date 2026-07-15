@@ -12,6 +12,7 @@ sets it to `1`.
 | Page | Content |
 |---|---|
 | **Live feed & PTZ** | 2×2 HLS grid (`cam1`…`camN`), per-camera PTZ pad (hold-to-move) |
+| **Recording** | Global ON/OFF toggle (`PUT /api/recording`) — MediaMTX live + persist `RECORD_ENABLE` |
 | **Monitor** | Live sensor tiles (door, cover, temp, impact, streams, disk) + alert stream |
 
 All data is **ingested** from existing tower surfaces — no duplicate monitoring

@@ -1,0 +1,21 @@
+# Ensures /var/kallon/recordings is the NVMe recordings volume before mediamtx starts.
+#
+# Installed by scripts/install/50-mediamtx.sh when RECORD_ENABLE=1.
+# Logic: scripts/kallon-ensure-recordings-mount.sh
+
+[Unit]
+Description=Kallon recordings volume (NVMe → /var/kallon/recordings)
+DefaultDependencies=yes
+After=local-fs.target
+Before=mediamtx.service
+ConditionPathExists=/usr/local/sbin/kallon-ensure-recordings-mount
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+EnvironmentFile=-/etc/kallon/device.env
+ExecStart=/usr/local/sbin/kallon-ensure-recordings-mount
+# Re-run on stop is unnecessary; leave the mount mounted.
+
+[Install]
+WantedBy=multi-user.target
