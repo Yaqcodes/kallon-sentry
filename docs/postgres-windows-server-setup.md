@@ -386,16 +386,26 @@ DATABASE_URL=postgresql://kallon:YOUR_PASSWORD@127.0.0.1:5432/kallon
 KALLON_OPS_SSH_PUBKEY_FILE=C:\kallon\secrets\terra-hub-ops.pub
 KALLON_OPS_SSH_IDENTITY_FILE=C:\kallon\secrets\terra-hub-ops.pem
 KALLON_PEER_BACKEND=subprocess
+KALLON_HUB_PROXY_PORT=8767
+KALLON_HUB_PROXY_TOKEN=GENERATE_WITH_openssl_rand_base64_32
+KALLON_PROXY_VIA_HUB=1
 "@ | Set-Content C:\kallon\config\enrollment-api.env -Encoding UTF8
 
 icacls C:\kallon\config\enrollment-api.env /inheritance:r /grant:r "Administrators:(F)" "SYSTEM:(F)"
 ```
+
+`KALLON_HUB_PROXY_TOKEN` must match the hub's `HUB_PROXY_TOKEN` in
+`/etc/kallon/hub-proxy.env` (see `docs/hub-tower-proxy-cutover.md`). Without it,
+tower routes return `hub_proxy_misconfigured`.
 
 | Variable | Production value |
 |----------|------------------|
 | `KALLON_PEER_BACKEND` | **`subprocess`** — never `noop` in prod |
 | `KALLON_OPS_SSH_IDENTITY_FILE` | Path to `terra-hub-ops.pem` — **required** for unattended SSH peer-add |
 | `KALLON_ADDPEER_CMD` | **Leave unset (recommended).** The API auto-runs `scripts/kallon-gateway-add-peer.sh` through Git Bash with a correctly-quoted argv. Only set this for a non-standard invocation. |
+| `KALLON_HUB_PROXY_PORT` | Hub tower-proxy port (default `8767`) |
+| `KALLON_HUB_PROXY_TOKEN` | **Shared secret** with hub `HUB_PROXY_TOKEN` — required for Platform API PTZ/status/snapshot |
+| `KALLON_PROXY_VIA_HUB` | `1` (default). Set `0` only if Artemis is itself a WireGuard NOC peer |
 
 > ⚠️ **Do not** paste a `KALLON_ADDPEER_CMD` containing `$bash` or `$addPeer`.
 > Those are PowerShell variables — they only resolve if the here-string above

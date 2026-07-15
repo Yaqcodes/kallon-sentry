@@ -58,6 +58,7 @@ allocated at enroll (`ip_allocations.next_host_octet`, row-locked in Postgres).
 | `confirm_token` | enrollment API per enroll | transient (in-memory on API) | — | **No** |
 | `ENROLLMENT_HMAC_KEY` (service) | `openssl rand -base64 32` | API host `enrollment-api.env`; baked into factory image | `600` | **No** |
 | `DATABASE_URL` | — | API host `enrollment-api.env` | `600` | **No** |
+| `KALLON_HUB_PROXY_TOKEN` / `HUB_PROXY_TOKEN` | `openssl rand -base64 32` | Artemis `enrollment-api.env` **and** hub `/etc/kallon/hub-proxy.env` (same value) | `600` / `640` | **No** |
 | **Terra hub-ops SSH** private key | `ssh-keygen` once | Control plane `C:\kallon\secrets\terra-hub-ops.pem` | `600` | **No** |
 | Terra hub-ops SSH public key | derived | Installed on **every** hub at `gateway-init` | `644` | **No** |
 
@@ -77,6 +78,9 @@ On the Windows Server, `C:\kallon\config\enrollment-api.env` (or Linux
 | `DATABASE_URL` | `postgresql://kallon:…@127.0.0.1:5432/kallon` |
 | `KALLON_PEER_BACKEND` | **`subprocess`** (never `noop` in prod) |
 | `KALLON_ADDPEER_CMD` | Template invoking `kallon-gateway-add-peer.sh` — see `docs/postgres-windows-server-setup.md` §7 |
+| `KALLON_HUB_PROXY_PORT` | `8767` (hub tower-proxy public TCP) |
+| `KALLON_HUB_PROXY_TOKEN` | Same secret as hub `HUB_PROXY_TOKEN` — Platform API PTZ/status/snapshots |
+| `KALLON_PROXY_VIA_HUB` | `1` (default). Artemis dials hub agent, not tower VPN IPs |
 | `KALLON_OPS_SSH_PUBKEY_FILE` | Path to `terra-hub-ops.pub` — hub provisioner installs on each hub |
 | `KALLON_OPS_SSH_IDENTITY_FILE` | Path to `terra-hub-ops.pem` — **required** for Python `ssh`/`scp` on Windows |
 

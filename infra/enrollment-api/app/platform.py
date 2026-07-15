@@ -44,25 +44,19 @@ log = logging.getLogger("platform")
 router = APIRouter(prefix="/v1")
 
 TOWER_GATEWAY_PORT = int(os.environ.get("KALLON_TOWER_GATEWAY_PORT", "8766"))
+HUB_PROXY_PORT = int(os.environ.get("KALLON_HUB_PROXY_PORT", "8767"))
+HUB_PROXY_TOKEN = os.environ.get("KALLON_HUB_PROXY_TOKEN", "")
 PROXY_CONNECT_TIMEOUT = float(os.environ.get("KALLON_PROXY_CONNECT_TIMEOUT", "3"))
 PROXY_READ_TIMEOUT = float(os.environ.get("KALLON_PROXY_READ_TIMEOUT", "10"))
 SNAPSHOT_READ_TIMEOUT = float(os.environ.get("KALLON_SNAPSHOT_READ_TIMEOUT", "20"))
 PLATFORM_API_KEY = os.environ.get("KALLON_PLATFORM_API_KEY", "")
 
-
-def _proxy_via_hub() -> bool:
-    """Artemis dials hub tower-proxy (default) unless explicitly disabled for lab VPN."""
-    return os.environ.get("KALLON_PROXY_VIA_HUB", "1").strip().lower() not in (
-        "0", "false", "no", "off",
-    )
-
-
-def _hub_proxy_token() -> str:
-    return os.environ.get("KALLON_HUB_PROXY_TOKEN", "").strip()
-
-
-def _hub_proxy_port() -> int:
-    return int(os.environ.get("KALLON_HUB_PROXY_PORT", "8767"))
+# When true (default), Artemis dials the customer hub tower-proxy on the public
+# internet instead of the tower VPN IP. Set KALLON_PROXY_VIA_HUB=0 only for
+# lab setups where Artemis is itself a WireGuard NOC peer.
+PROXY_VIA_HUB = os.environ.get("KALLON_PROXY_VIA_HUB", "1").strip().lower() not in (
+    "0", "false", "no", "off",
+)
 
 
 # ── error envelope ───────────────────────────────────────────────────────────
@@ -275,7 +269,7 @@ def _tower_proxy_target(
                 "it must complete first-boot enrollment before tower APIs work",
                 device_id=device_id,
             )
-        if not _proxy_via_hub():
+        if not PROXY_VIA_HUB:
             return f"http://{tower.vpn_ip}:{TOWER_GATEWAY_PORT}", tower.vpn_ip, None
 
         try:
@@ -294,15 +288,13 @@ def _tower_proxy_target(
                 "provision the hub before tower proxy works",
                 device_id=device_id,
             )
-        if not _hub_proxy_token():
+        if not HUB_PROXY_TOKEN:
             return None, None, _err(
                 503, "hub_proxy_misconfigured",
-                "KALLON_HUB_PROXY_TOKEN is unset — add it to enrollment-api.env "
-                "(same value as hub HUB_PROXY_TOKEN) and restart enrollment-api. "
-                "See docs/hub-tower-proxy-cutover.md",
+                "KALLON_HUB_PROXY_TOKEN is unset on the control plane",
                 device_id=device_id,
             )
-        base = f"http://{hub_host}:{_hub_proxy_port()}/proxy/{device_id}"
+        base = f"http://{hub_host}:{HUB_PROXY_PORT}/proxy/{device_id}"
         return base, tower.vpn_ip, None
     except NotFound:
         return None, None, _err(404, "not_found", f"unknown device_id {device_id!r}")
@@ -328,8 +320,8 @@ async def _proxy(
     assert base is not None and vpn_ip is not None
     timeout = httpx.Timeout(connect=PROXY_CONNECT_TIMEOUT, read=read_timeout, write=10.0, pool=5.0)
     headers: dict[str, str] = {}
-    if _proxy_via_hub():
-        headers["X-Kallon-Hub-Proxy-Token"] = _hub_proxy_token()
+    if PROXY_VIA_HUB:
+        headers["X-Kallon-Hub-Proxy-Token"] = HUB_PROXY_TOKEN
         headers["X-Kallon-Tower-Vpn-Ip"] = vpn_ip
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
@@ -341,7 +333,7 @@ async def _proxy(
         return _err(
             503, "tower_offline",
             f"tower did not respond ({exc.__class__.__name__}) — "
-            + ("hub proxy unreachable or VPN tunnel down" if _proxy_via_hub()
+            + ("hub proxy unreachable or VPN tunnel down" if PROXY_VIA_HUB
                else "VPN tunnel down or tower rebooting"),
             device_id=device_id,
         )
