@@ -38,6 +38,9 @@ Endpoints
   POST /ingest/alerts         -> receive a forwarded alert (from alert_listener)
   POST /api/ptz               -> JSON relay used by the on-Jetson SPA
   POST /api/snapshot          -> grab one JPEG frame to disk (SPA kiosk)
+  GET  /api/recording         -> continuous recording status (desired + effective)
+  PUT  /api/recording         -> {"enabled": true|false} toggle (MediaMTX + persist)
+  POST /api/recording         -> same as PUT (alias)
 
 Environment
 -----------
@@ -53,6 +56,8 @@ Environment
   PTZ_HOST             default 127.0.0.1
   PTZ_PORT             default 8765
   ALERT_HISTORY        default 200         (in-memory ring buffer size)
+  RECORD_APPLY_CMD     default sudo -n /usr/local/sbin/kallon-apply-recording
+  RECORD_PATH          default /var/kallon/recordings (from device.env)
   CAMERA_IPS           from device.env (comma-separated) -> camera count
   DEVICE_ID            from device.env
 """
@@ -92,6 +97,11 @@ RTSP_LOCAL_BASE = (
 SNAPSHOT_TIMEOUT_SEC = float(os.environ.get("SNAPSHOT_TIMEOUT_SEC", "15"))
 SNAPSHOT_PATH = Path(os.environ.get("SNAPSHOT_PATH", str(Path.home() / "Pictures" / "Sentinel")))
 ALERT_HISTORY = int(os.environ.get("ALERT_HISTORY", "200"))
+RECORD_PATH = os.environ.get("RECORD_PATH", "/var/kallon/recordings")
+RECORD_APPLY_CMD = os.environ.get(
+    "RECORD_APPLY_CMD", "sudo -n /usr/local/sbin/kallon-apply-recording"
+)
+DEVICE_ENV_PATH = Path(os.environ.get("KALLON_ENV", "/etc/kallon/device.env"))
 
 _SNAPSHOT_RE = re.compile(r"^/api/snapshot/cam(\d+)$")
 
@@ -196,6 +206,23 @@ def _http_get_json(url: str, timeout: float = 4.0) -> Any:
     req = urllib.request.Request(url, headers={"Accept": "application/json"})
     with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 (loopback)
         return json.loads(resp.read().decode("utf-8"))
+
+
+def _http_json(
+    method: str, url: str, payload: Optional[dict[str, Any]] = None, timeout: float = 8.0
+) -> Any:
+    data = None if payload is None else json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=data,
+        method=method,
+        headers={"Accept": "application/json", "Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 (loopback)
+        raw = resp.read()
+        if not raw:
+            return None
+        return json.loads(raw.decode("utf-8"))
 
 
 def camera_list() -> list[dict[str, Any]]:
@@ -319,6 +346,210 @@ def snapshot_save(camera: int) -> dict[str, Any]:
     return {"ok": True, "path": str(dest), "filename": filename}
 
 
+def _env_record_enable() -> Optional[bool]:
+    """Read RECORD_ENABLE from device.env (authoritative for reboot)."""
+    try:
+        raw = DEVICE_ENV_PATH.read_bytes()
+        for enc in ("utf-8-sig", "utf-8", "cp1252", "latin-1"):
+            try:
+                text = raw.decode(enc)
+                break
+            except UnicodeDecodeError:
+                continue
+        else:
+            text = raw.decode("utf-8", errors="replace")
+    except OSError:
+        return None
+    for line_raw in text.splitlines():
+        line = line_raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, val = line.split("=", 1)
+        if key.strip() != "RECORD_ENABLE":
+            continue
+        return val.strip().strip("\"'") in ("1", "true", "yes", "on")
+    return None
+
+
+def _record_patch_body(enable: bool) -> dict[str, Any]:
+    """Full MediaMTX PathConf patch for enabling/disabling continuous record."""
+    if not enable:
+        # Keep sourceOnDemand as-is so live HLS/MJPEG stays up when stopping NVR.
+        return {"record": False}
+    delete_after = (
+        os.environ.get("RECORD_MEDIAMTX_DELETE_AFTER")
+        or os.environ.get("RECORD_RETENTION")
+        or "24h"
+    )
+    if re.fullmatch(r"[0-9]+", delete_after):
+        delete_after = f"{delete_after}h"
+    segment = (
+        os.environ.get("RECORD_MEDIAMTX_SEGMENT_FILE_DURATION")
+        or os.environ.get("RECORD_SEGMENT_DURATION")
+        or "1h"
+    )
+    return {
+        "record": True,
+        "sourceOnDemand": False,
+        "recordPath": f"{RECORD_PATH.rstrip('/')}" + "/%path/%Y-%m-%d_%H-%M-%S-%f",
+        "recordFormat": "fmp4",
+        "recordPartDuration": "1s",
+        "recordSegmentDuration": segment,
+        "recordDeleteAfter": delete_after,
+    }
+
+
+def _disk_hints() -> dict[str, Any]:
+    hints: dict[str, Any] = {"mount": RECORD_PATH}
+    try:
+        import shutil
+
+        usage = shutil.disk_usage(RECORD_PATH)
+        hints["space_total_gb"] = round(usage.total / (1024**3), 2)
+        hints["space_free_gb"] = round(usage.free / (1024**3), 2)
+        hints["space_used_gb"] = round(usage.used / (1024**3), 2)
+    except OSError as exc:
+        hints["error"] = str(exc)
+    try:
+        src = subprocess.check_output(
+            ["findmnt", "-n", "-o", "SOURCE", "--target", RECORD_PATH],
+            text=True,
+            stderr=subprocess.DEVNULL,
+            timeout=3,
+        ).strip()
+        hints["source"] = src or None
+        hints["on_nvme"] = src.startswith("/dev/nvme") if src else False
+    except (OSError, subprocess.SubprocessError):
+        hints["source"] = None
+        hints["on_nvme"] = None
+    return hints
+
+
+def recording_status() -> dict[str, Any]:
+    """Desired (device.env) + effective (MediaMTX path config) recording state."""
+    cameras = camera_list()
+    paths: list[dict[str, Any]] = []
+    mtx_error: Optional[str] = None
+    for cam in cameras:
+        name = cam["path"]
+        entry: dict[str, Any] = {"name": name, "record": None, "ready": None}
+        try:
+            conf = _http_get_json(f"{MEDIAMTX_API}/v3/config/paths/get/{name}", timeout=3.0)
+            entry["record"] = bool(conf.get("record"))
+        except Exception as exc:  # noqa: BLE001
+            mtx_error = str(exc)
+        try:
+            live = _http_get_json(f"{MEDIAMTX_API}/v3/paths/get/{name}", timeout=2.0)
+            entry["ready"] = bool(live.get("ready"))
+        except Exception:  # noqa: BLE001
+            pass
+        paths.append(entry)
+
+    effective = None
+    known = [p["record"] for p in paths if p["record"] is not None]
+    if known:
+        effective = all(known)
+
+    desired = _env_record_enable()
+    if effective is not None:
+        enabled = effective
+    elif desired is not None:
+        enabled = desired
+    else:
+        enabled = False
+
+    warnings: list[str] = []
+    if mtx_error:
+        warnings.append(f"mediamtx: {mtx_error}")
+    disk = _disk_hints()
+    if enabled and disk.get("on_nvme") is False:
+        warnings.append(
+            f"{RECORD_PATH} is not on NVMe (source={disk.get('source')}) — "
+            "risk of filling the OS disk"
+        )
+    if desired is not None and effective is not None and desired != effective:
+        warnings.append("desired RECORD_ENABLE differs from live MediaMTX record flags")
+
+    return {
+        "enabled": bool(enabled),
+        "desired": desired,
+        "effective": effective,
+        "record_path": RECORD_PATH,
+        "delete_after": os.environ.get("RECORD_MEDIAMTX_DELETE_AFTER")
+        or os.environ.get("RECORD_RETENTION")
+        or "24h",
+        "segment_duration": os.environ.get("RECORD_MEDIAMTX_SEGMENT_FILE_DURATION")
+        or os.environ.get("RECORD_SEGMENT_DURATION")
+        or "1h",
+        "paths": paths,
+        "disk": disk,
+        "warnings": warnings,
+    }
+
+
+def recording_set(enable: bool) -> tuple[int, dict[str, Any]]:
+    """Apply recording ON/OFF live (MediaMTX) then persist via apply script."""
+    cameras = camera_list()
+    if not cameras:
+        return 409, {
+            "error": {
+                "code": "no_cameras",
+                "message": "CAMERA_IPS is empty — nothing to record",
+            }
+        }
+
+    body = _record_patch_body(enable)
+    path_errors: list[dict[str, str]] = []
+    for cam in cameras:
+        name = cam["path"]
+        try:
+            _http_json(
+                "PATCH",
+                f"{MEDIAMTX_API}/v3/config/paths/patch/{name}",
+                body,
+                timeout=8.0,
+            )
+        except Exception as exc:  # noqa: BLE001
+            path_errors.append({"name": name, "error": str(exc)})
+
+    if path_errors and len(path_errors) == len(cameras):
+        return 502, {
+            "error": {
+                "code": "mediamtx_patch_failed",
+                "message": "failed to PATCH any camera path",
+                "paths": path_errors,
+            }
+        }
+
+    persist_error: Optional[str] = None
+    cmd = RECORD_APPLY_CMD.split() + (["on"] if enable else ["off"])
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60, check=False)
+        if proc.returncode != 0:
+            persist_error = (proc.stderr or proc.stdout or f"exit {proc.returncode}").strip()[-500:]
+            log.warning("recording persist failed: %s", persist_error)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        persist_error = str(exc)
+        log.warning("recording persist invoke failed: %s", persist_error)
+
+    status = recording_status()
+    status["ok"] = True
+    if path_errors:
+        status["path_errors"] = path_errors
+        status["warnings"] = list(status.get("warnings") or []) + [
+            f"partial MediaMTX patch failure on {[p['name'] for p in path_errors]}"
+        ]
+    if persist_error:
+        status["persist_ok"] = False
+        status["persist_error"] = persist_error
+        status["warnings"] = list(status.get("warnings") or []) + [
+            "live MediaMTX state applied but persistence failed — reboot may revert"
+        ]
+    else:
+        status["persist_ok"] = True
+    return 200, status
+
+
 def ptz_rest_move(payload: dict[str, Any]) -> tuple[int, dict[str, Any]]:
     """REST-shaped PTZ move -> daemon call. Returns (http_status, body)."""
     mode = payload.get("mode", "absolute")
@@ -416,6 +647,8 @@ class Handler(BaseHTTPRequestHandler):
             self._events()
         elif path == "/api/ptz/status":
             self._ptz_status()
+        elif path == "/api/recording":
+            self._json(200, recording_status())
         elif m := _SNAPSHOT_RE.match(path):
             self._snapshot_inline(int(m.group(1)))
         else:
@@ -423,6 +656,13 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_HEAD(self) -> None:  # noqa: N802
         self.do_GET()
+
+    def do_PUT(self) -> None:  # noqa: N802
+        path = self.path.split("?", 1)[0]
+        if path == "/api/recording":
+            self._recording_set()
+        else:
+            self._json(404, {"error": {"code": "not_found", "message": f"no route {path}"}})
 
     def do_POST(self) -> None:  # noqa: N802
         path = self.path.split("?", 1)[0]
@@ -436,6 +676,8 @@ class Handler(BaseHTTPRequestHandler):
             self._ptz_stop()
         elif path == "/api/snapshot":
             self._snapshot_save()
+        elif path == "/api/recording":
+            self._recording_set()
         else:
             self._json(404, {"error": {"code": "not_found", "message": f"no route {path}"}})
 
@@ -556,6 +798,23 @@ class Handler(BaseHTTPRequestHandler):
             self._json(400, {"ok": False, "error": {"code": "BAD_CAMERA", "message": "camera must be a positive integer"}})
             return
         self._json(200, snapshot_save(camera))
+
+    def _recording_set(self) -> None:
+        payload = self._read_json_object()
+        if payload is None:
+            return
+        if "enabled" not in payload:
+            self._json(422, {"error": {"code": "invalid_request", "message": "'enabled' (bool) is required"}})
+            return
+        enabled = payload.get("enabled")
+        if not isinstance(enabled, bool):
+            if isinstance(enabled, (int, str)):
+                enabled = str(enabled).strip().lower() in ("1", "true", "yes", "on")
+            else:
+                self._json(422, {"error": {"code": "invalid_request", "message": "'enabled' must be a boolean"}})
+                return
+        code, body = recording_set(bool(enabled))
+        self._json(code, body)
 
     def _events(self) -> None:
         self.send_response(200)

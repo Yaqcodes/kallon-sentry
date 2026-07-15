@@ -4,7 +4,8 @@ import type { Camera, CameraStatus } from '../types';
 import { colors, font } from '../tokens';
 import { health, levelColor } from '../util';
 import { buildSensors } from '../sensors';
-import { ptz, snapshot } from '../api';
+import { ptz, snapshot, getRecording, setRecording } from '../api';
+import type { RecordingStatus } from '../api';
 import { useTower } from '../useTower';
 import { usePtzPositions } from '../usePtzPositions';
 import { formatZoom } from '../ptzMetrics';
@@ -38,6 +39,8 @@ export default function SentinelConsole() {
   const [spotlight, setSpotlight] = useState(false);
   const [panelOpen, setPanelOpen] = useState(false);
   const [ptzMsg, setPtzMsg] = useState('');
+  const [recording, setRecordingState] = useState<RecordingStatus | null>(null);
+  const [recBusy, setRecBusy] = useState(false);
   const [ptzSpeedPct, setPtzSpeedPct] = useState(() => {
     try {
       const saved = Number(localStorage.getItem(PTZ_SPEED_KEY));
@@ -83,17 +86,32 @@ export default function SentinelConsole() {
         el: pos?.el ?? 0,
         zoom: pos?.zoom ?? 0,
         ptzLive: !!pos,
-        recording: false,
+        recording: !!(recording?.enabled),
         recStart: null,
         homeAz: 0, homeEl: 0,
       };
     });
-  }, [config, streams, readyByPath, positions]);
+  }, [config, streams, readyByPath, positions, recording]);
 
   const deviceName = (config?.device_id || 'SENTINEL TOWER').toUpperCase();
   const selectedCam = cameras.find((c) => c.id === selectedCamId) ?? cameras[0];
   const sensors = useMemo(() => buildSensors(status, streams, cameras), [status, streams, cameras]);
   const sysHealth = health(sensors);
+
+  useEffect(() => {
+    let cancelled = false;
+    const pull = async () => {
+      try {
+        const s = await getRecording();
+        if (!cancelled) setRecordingState(s);
+      } catch {
+        /* gateway down — leave last known */
+      }
+    };
+    void pull();
+    const id = window.setInterval(pull, 5000);
+    return () => { cancelled = true; window.clearInterval(id); };
+  }, []);
 
   // keep a valid selection as cameras (re)appear
   useEffect(() => {
@@ -108,6 +126,31 @@ export default function SentinelConsole() {
     if (res && res.ok === false) setPtzMsg(`${verb} failed: ${res.error?.message ?? 'error'}`);
     else setPtzMsg(`${verb} ok`);
   }, []);
+
+  const toggleRecording = useCallback(async () => {
+    if (recBusy) return;
+    const next = !(recording?.enabled);
+    setRecBusy(true);
+    setPtzMsg(next ? 'enabling recording…' : 'stopping recording…');
+    try {
+      const res = await setRecording(next);
+      setRecordingState(res);
+      if (res.error) {
+        setPtzMsg(`recording failed: ${res.error.message ?? res.error.code ?? 'error'}`);
+      } else if (res.persist_ok === false) {
+        setPtzMsg(`recording ${next ? 'ON' : 'OFF'} (live) — persist warning`);
+      } else {
+        setPtzMsg(`recording ${next ? 'ON' : 'OFF'}`);
+      }
+      if (res.warnings?.length) {
+        console.warn('recording warnings', res.warnings);
+      }
+    } catch (e) {
+      setPtzMsg(`recording failed: ${String(e)}`);
+    } finally {
+      setRecBusy(false);
+    }
+  }, [recBusy, recording?.enabled]);
 
   const setSpeed = useCallback((pct: number) => {
     setPtzSpeedPct(pct);
@@ -334,9 +377,26 @@ export default function SentinelConsole() {
               <button className="ctl-btn" onClick={() => zoomBy(ZOOM_STEP)} title="Zoom in">ZOOM +</button>
             </div>
 
-            <button className="rec-btn" disabled title="Recording is managed on the device">
-              <span style={{ width: 9, height: 9, borderRadius: '50%', background: colors.textFaint }} />
-              RECORDING · DEVICE-MANAGED
+            <button
+              className={`rec-btn${recording?.enabled ? ' rec-btn--on' : ''}`}
+              disabled={recBusy || !connected}
+              title={recording?.enabled ? 'Stop continuous recording' : 'Start continuous recording'}
+              onClick={() => void toggleRecording()}
+            >
+              <span
+                className={recording?.enabled ? 'rec-dot' : undefined}
+                style={{
+                  width: 9,
+                  height: 9,
+                  borderRadius: '50%',
+                  background: recording?.enabled ? colors.offline : colors.textFaint,
+                }}
+              />
+              {recBusy
+                ? 'RECORDING…'
+                : recording?.enabled
+                  ? 'RECORDING · ON'
+                  : 'RECORDING · OFF'}
             </button>
 
             <div style={{ minHeight: 14, fontFamily: font.mono, fontSize: 10, letterSpacing: '.08em', color: ptzMsg.includes('failed') ? colors.offline : colors.textFaint }}>

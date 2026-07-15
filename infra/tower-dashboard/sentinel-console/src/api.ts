@@ -91,6 +91,35 @@ export interface SnapshotResult {
   error?: { code?: string; message?: string };
 }
 
+export interface RecordingPathStatus {
+  name: string;
+  record: boolean | null;
+  ready: boolean | null;
+}
+
+export interface RecordingStatus {
+  enabled: boolean;
+  desired?: boolean | null;
+  effective?: boolean | null;
+  record_path?: string;
+  delete_after?: string;
+  segment_duration?: string;
+  paths?: RecordingPathStatus[];
+  disk?: {
+    mount?: string;
+    source?: string | null;
+    on_nvme?: boolean | null;
+    space_free_gb?: number;
+    space_total_gb?: number;
+    space_used_gb?: number;
+  };
+  warnings?: string[];
+  ok?: boolean;
+  persist_ok?: boolean;
+  persist_error?: string;
+  error?: { code?: string; message?: string };
+}
+
 async function getJSON<T>(url: string): Promise<T> {
   const r = await fetch(url, { headers: { Accept: 'application/json' } });
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
@@ -100,7 +129,30 @@ async function getJSON<T>(url: string): Promise<T> {
 export const getConfig = () => getJSON<ConfigResponse>('/api/config');
 export const getStreams = () => getJSON<StreamsResponse>('/api/streams');
 export const getStatus = () => getJSON<StatusResponse>('/api/status');
+export const getRecording = () => getJSON<RecordingStatus>('/api/recording');
 
+/** Toggle continuous NVR recording on all cameras (global). */
+export async function setRecording(enabled: boolean): Promise<RecordingStatus> {
+  try {
+    const r = await fetch('/api/recording', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({ enabled }),
+    });
+    const body = (await r.json()) as RecordingStatus;
+    if (!r.ok) {
+      return {
+        enabled,
+        ok: false,
+        error: body.error ?? { code: 'HTTP', message: `HTTP ${r.status}` },
+        warnings: body.warnings,
+      };
+    }
+    return body;
+  } catch (e) {
+    return { enabled, ok: false, error: { code: 'GATEWAY', message: String(e) } };
+  }
+}
 /** Relay a single PTZ command to the daemon via the gateway. */
 export async function ptz(method: string, params: Record<string, unknown>): Promise<PtzResult> {
   try {

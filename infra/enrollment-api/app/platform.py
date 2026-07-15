@@ -415,3 +415,29 @@ async def tower_streams(device_id: str, request: Request):
     if (resp := _auth_check(request)) is not None:
         return resp
     return await _proxy(device_id, "GET", "/api/streams")
+
+
+class RecordingSetRequest(BaseModel):
+    enabled: bool
+
+
+@router.get("/towers/{device_id}/recording", tags=["Tower proxy"])
+async def tower_recording_get(device_id: str, request: Request):
+    """Continuous NVR recording status (desired + MediaMTX effective)."""
+    if (resp := _auth_check(request)) is not None:
+        return resp
+    return await _proxy(device_id, "GET", "/api/recording")
+
+
+@router.put("/towers/{device_id}/recording", tags=["Tower proxy"])
+async def tower_recording_put(device_id: str, request: Request):
+    """Enable/disable continuous recording on all tower cameras."""
+    if (resp := _auth_check(request)) is not None:
+        return resp
+    try:
+        payload = RecordingSetRequest.model_validate_json(await request.body() or b"{}")
+    except ValidationError as e:
+        return _err(422, "invalid_request", f"invalid request body: {e.errors()}")
+    return await _proxy(
+        device_id, "PUT", "/api/recording", json_body=payload.model_dump()
+    )

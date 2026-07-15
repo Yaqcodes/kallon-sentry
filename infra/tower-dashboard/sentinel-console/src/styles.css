@@ -130,15 +130,19 @@ body {
 .ctl-btn:hover { border-color: #ffffff; color: #ffffff; }
 .ctl-btn:active { transform: scale(.97); }
 
-/* ---- record (device-managed; shown disabled) ---- */
+/* ---- record toggle ---- */
 .rec-btn {
   display: flex; align-items: center; justify-content: center; gap: 10px;
   border: 1px solid #232c34; border-radius: 6px;
   background: linear-gradient(180deg, #161f27, #0f151a);
-  color: #c7d3e0; padding: 12px;
+  color: #c7d3e0; padding: 12px; cursor: pointer;
   font-family: 'Rajdhani', sans-serif; font-weight: 600; font-size: 14px; letter-spacing: .12em;
+  transition: border-color .15s, color .15s, opacity .15s;
 }
+.rec-btn:hover:not(:disabled) { border-color: #4a5762; color: #fff; }
 .rec-btn:disabled { opacity: .55; cursor: not-allowed; }
+.rec-btn--on { border-color: rgba(239, 68, 68, .55); color: #fecaca; }
+.rec-btn--on:hover:not(:disabled) { border-color: #ef4444; }
 .rec-dot { animation: sfBlink 1s steps(1) infinite; }
 
 /* ---- PTZ pad ---- */

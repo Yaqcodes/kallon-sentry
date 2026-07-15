@@ -151,7 +151,8 @@ Environment=MJPEG_PROXY=http://127.0.0.1:${MJPEG_PORT}
 ExecStart=/usr/bin/python3 $DASH_DIR/gateway.py
 Restart=on-failure
 RestartSec=3
-NoNewPrivileges=true
+# NoNewPrivileges must stay off: gateway runs kallon-apply-recording via sudo
+# to persist RECORD_ENABLE / mediamtx.yml after a dashboard recording toggle.
 PrivateTmp=true
 
 [Install]

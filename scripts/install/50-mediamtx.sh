@@ -83,13 +83,42 @@ install_recordings_mount_helper() {
   systemctl enable kallon-recordings-mount.service >/dev/null 2>&1 || true
 }
 
+# Dashboard / platform toggle: persist RECORD_ENABLE + rewrite mediamtx.yml.
+install_recording_apply_helper() {
+  local src="$REPO_DIR/scripts/kallon-apply-recording.sh"
+  local dst=/usr/local/sbin/kallon-apply-recording
+  local sudotmp sudodst=/etc/sudoers.d/kallon-recording
+  [[ -f "$src" ]] || die "missing $src"
+  install_if_changed "$src" "$dst" 0755 root root || true
+
+  if [[ -f "$REPO_DIR/deploy/kallon-recording.sudoers.example" ]]; then
+    sudotmp="$(mktemp)"
+    sed "s/__RUNTIME_USER__/${RUNTIME_USER}/g" \
+      "$REPO_DIR/deploy/kallon-recording.sudoers.example" > "$sudotmp"
+    if [[ -f "$sudodst" ]] && cmp -s "$sudotmp" "$sudodst"; then
+      log "unchanged: $sudodst"
+      rm -f "$sudotmp"
+    else
+      if visudo -cf "$sudotmp" >/dev/null 2>&1; then
+        install -m 0440 -o root -g root "$sudotmp" "$sudodst"
+        ok "installed: $sudodst (NOPASSWD ${RUNTIME_USER} → kallon-apply-recording)"
+      else
+        warn "sudoers fragment failed visudo -cf — left $sudodst untouched"
+      fi
+      rm -f "$sudotmp"
+    fi
+  fi
+}
+
 # Mount (or confirm) the SSD at RECORD_PATH before rendering mediamtx.yml.
 ensure_recordings_volume() {
   resolve_record_path
+  # Always install apply helpers so the dashboard can enable recording later.
+  install_recording_apply_helper
+  install_recordings_mount_helper
   if [[ "${RECORD_ENABLE}" != "1" ]]; then
     return 0
   fi
-  install_recordings_mount_helper
   if /usr/local/sbin/kallon-ensure-recordings-mount; then
     ok "recordings volume ready at ${RECORD_PATH}"
   else
