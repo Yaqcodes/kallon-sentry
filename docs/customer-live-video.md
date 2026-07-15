@@ -185,7 +185,7 @@ issuer — remux stays on the hub either way.
 
 | Symptom | Likely cause |
 |---|---|
-| `hub_proxy_misconfigured` | `KALLON_HUB_PROXY_TOKEN` unset on Artemis |
+| `hub_proxy_misconfigured` | Token missing from process env — confirm `KALLON_HUB_PROXY_TOKEN` in `C:\kallon\config\enrollment-api.env`, pull latest control plane (env bootstrap must run **before** platform import), restart NSSM. Startup log should say `hub proxy token configured`. Empty NSSM AppEnvironmentExtra keys used to block the file; that is fixed. |
 | `tower_offline` on live | Lightsail missing TCP **8768**, UFW, or `kallon-hls-proxy` down |
 | `stream_starting` / empty playlist | Tower RTSP not ready, WG down, or first on-demand pull still spinning up |
 | 401 from hub | Token mismatch between Artemis env and `/etc/kallon/hub-proxy.env` |

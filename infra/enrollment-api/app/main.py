@@ -34,14 +34,6 @@ from pydantic import BaseModel, Field, ValidationError
 # Make the repo-root `registry` package importable when run from infra/enrollment-api.
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from registry import Conflict, NotFound, RegistryError, SubnetExhausted, get_registry  # noqa: E402
-from registry.identity import validate  # noqa: E402
-
-from . import peering  # noqa: E402
-from .peering import get_peer_adder  # noqa: E402
-from .alerts import router as alerts_router  # noqa: E402
-from .platform import router as platform_router  # noqa: E402
-
 
 def _bootstrap_env_file() -> None:
     """Load enrollment-api.env into os.environ so that file is the single
@@ -54,8 +46,14 @@ def _bootstrap_env_file() -> None:
     with a half-configured API. Loading the file here makes the file itself
     authoritative for every launch method.
 
-    Precedence: an already-set environment variable WINS (the file only fills in
-    what's missing), so an explicit NSSM/shell override is still honored.
+    MUST run before importing ``platform`` / ``alerts`` / ``peering`` — those
+    modules historically cached env at import time; even with lazy reads,
+    peer-add and logging config need the file first.
+
+    Precedence: a non-empty already-set environment variable WINS. Empty or
+    whitespace-only process env values are treated as unset so the file can
+    fill them (NSSM sometimes registers blank keys that would otherwise block
+    the file forever).
     """
     default = (
         r"C:\kallon\config\enrollment-api.env" if os.name == "nt"
@@ -80,7 +78,10 @@ def _bootstrap_env_file() -> None:
             # inner-quoted value like a command template intact).
             if len(val) >= 2 and val[0] == val[-1] and val[0] in ('"', "'"):
                 val = val[1:-1]
-            if not key or key in os.environ:
+            if not key:
+                continue
+            existing = os.environ.get(key)
+            if existing is not None and existing.strip():
                 continue
             os.environ[key] = val
             loaded += 1
@@ -92,7 +93,18 @@ def _bootstrap_env_file() -> None:
     print(f"[enrollment] loaded {loaded} env var(s) from {env_file}", file=sys.stderr)
 
 
+# Bootstrap BEFORE sibling imports — platform used to bind HUB_PROXY_TOKEN at
+# import time, which raced this loader and produced hub_proxy_misconfigured
+# even when enrollment-api.env had the token set.
 _bootstrap_env_file()
+
+from registry import Conflict, NotFound, RegistryError, SubnetExhausted, get_registry  # noqa: E402
+from registry.identity import validate  # noqa: E402
+
+from . import peering  # noqa: E402
+from .peering import get_peer_adder  # noqa: E402
+from .alerts import router as alerts_router  # noqa: E402
+from .platform import router as platform_router  # noqa: E402
 
 
 def _configure_logging() -> None:
@@ -205,6 +217,18 @@ def _startup_checks() -> None:
     # Never raises — logs everything an operator needs to fix a misconfigured
     # deploy before it strands a real tower. See peering.startup_check().
     peering.startup_check()
+    via_hub = os.environ.get("KALLON_PROXY_VIA_HUB", "1").strip().lower() not in (
+        "0", "false", "no", "off",
+    )
+    token = os.environ.get("KALLON_HUB_PROXY_TOKEN", "").strip()
+    if via_hub and not token:
+        log.error(
+            "KALLON_HUB_PROXY_TOKEN is unset — tower proxy / live HLS will return "
+            "hub_proxy_misconfigured. Set it in C:\\kallon\\config\\enrollment-api.env "
+            "and restart (do not rely on NSSM AppEnvironmentExtra alone)."
+        )
+    elif via_hub:
+        log.info("hub proxy token configured (KALLON_HUB_PROXY_TOKEN set, via_hub=1)")
 
 
 @app.exception_handler(Exception)

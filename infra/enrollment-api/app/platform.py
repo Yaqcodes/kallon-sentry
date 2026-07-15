@@ -45,22 +45,82 @@ log = logging.getLogger("platform")
 
 router = APIRouter(prefix="/v1")
 
-TOWER_GATEWAY_PORT = int(os.environ.get("KALLON_TOWER_GATEWAY_PORT", "8766"))
-HUB_PROXY_PORT = int(os.environ.get("KALLON_HUB_PROXY_PORT", "8767"))
-HUB_HLS_PORT = int(os.environ.get("KALLON_HUB_HLS_PORT", "8768"))
-HUB_PROXY_TOKEN = os.environ.get("KALLON_HUB_PROXY_TOKEN", "")
-PROXY_CONNECT_TIMEOUT = float(os.environ.get("KALLON_PROXY_CONNECT_TIMEOUT", "3"))
-PROXY_READ_TIMEOUT = float(os.environ.get("KALLON_PROXY_READ_TIMEOUT", "10"))
-SNAPSHOT_READ_TIMEOUT = float(os.environ.get("KALLON_SNAPSHOT_READ_TIMEOUT", "20"))
-LIVE_READ_TIMEOUT = float(os.environ.get("KALLON_LIVE_READ_TIMEOUT", "60"))
-PLATFORM_API_KEY = os.environ.get("KALLON_PLATFORM_API_KEY", "")
+def _env_int(name: str, default: int) -> int:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
 
-# When true (default), Artemis dials the customer hub tower-proxy on the public
-# internet instead of the tower VPN IP. Set KALLON_PROXY_VIA_HUB=0 only for
-# lab setups where Artemis is itself a WireGuard NOC peer.
-PROXY_VIA_HUB = os.environ.get("KALLON_PROXY_VIA_HUB", "1").strip().lower() not in (
-    "0", "false", "no", "off",
-)
+
+def _env_float(name: str, default: float) -> float:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        return default
+
+
+# Read env lazily — main.py loads enrollment-api.env at startup, and operators
+# may restart after editing the file without guaranteeing import order.
+def _hub_proxy_token() -> str:
+    return os.environ.get("KALLON_HUB_PROXY_TOKEN", "").strip()
+
+
+def _platform_api_key() -> str:
+    return os.environ.get("KALLON_PLATFORM_API_KEY", "").strip()
+
+
+def _proxy_via_hub() -> bool:
+    return os.environ.get("KALLON_PROXY_VIA_HUB", "1").strip().lower() not in (
+        "0", "false", "no", "off",
+    )
+
+
+def _tower_gateway_port() -> int:
+    return _env_int("KALLON_TOWER_GATEWAY_PORT", 8766)
+
+
+def _hub_proxy_port() -> int:
+    return _env_int("KALLON_HUB_PROXY_PORT", 8767)
+
+
+def _hub_hls_port() -> int:
+    return _env_int("KALLON_HUB_HLS_PORT", 8768)
+
+
+def _proxy_connect_timeout() -> float:
+    return _env_float("KALLON_PROXY_CONNECT_TIMEOUT", 3.0)
+
+
+def _proxy_read_timeout() -> float:
+    return _env_float("KALLON_PROXY_READ_TIMEOUT", 10.0)
+
+
+def _snapshot_read_timeout() -> float:
+    return _env_float("KALLON_SNAPSHOT_READ_TIMEOUT", 20.0)
+
+
+def _live_read_timeout() -> float:
+    return _env_float("KALLON_LIVE_READ_TIMEOUT", 60.0)
+
+
+# Back-compat aliases used by older tests/docs that import module-level names.
+# Prefer the lazy helpers above in new code.
+TOWER_GATEWAY_PORT = _tower_gateway_port()
+HUB_PROXY_PORT = _hub_proxy_port()
+HUB_HLS_PORT = _hub_hls_port()
+HUB_PROXY_TOKEN = _hub_proxy_token()  # may be stale after late env load — use _hub_proxy_token()
+PROXY_CONNECT_TIMEOUT = _proxy_connect_timeout()
+PROXY_READ_TIMEOUT = _proxy_read_timeout()
+SNAPSHOT_READ_TIMEOUT = _snapshot_read_timeout()
+LIVE_READ_TIMEOUT = _live_read_timeout()
+PLATFORM_API_KEY = _platform_api_key()
+PROXY_VIA_HUB = _proxy_via_hub()
 
 
 # ── error envelope ───────────────────────────────────────────────────────────
@@ -74,10 +134,11 @@ def _auth_check(request: Request) -> Optional[JSONResponse]:
     Accepts X-Kallon-Api-Key header or ?api_key= query (needed for HLS / hls.js
     / Safari native playback where custom headers are awkward or impossible).
     """
-    if not PLATFORM_API_KEY:
+    expected = _platform_api_key()
+    if not expected:
         return None
     provided = request.headers.get("X-Kallon-Api-Key", "") or request.query_params.get("api_key", "")
-    if provided != PLATFORM_API_KEY:
+    if provided != expected:
         return _err(401, "unauthorized", "missing or invalid API key")
     return None
 
@@ -306,7 +367,7 @@ def _tower_proxy_target(
     When direct (lab): base is ``http://{vpn_ip}:{tower_port}``.
     Paths appended by callers are tower-gateway paths (``/api/...``).
     """
-    if not PROXY_VIA_HUB:
+    if not _proxy_via_hub():
         reg = get_registry()
         try:
             tower = reg.get_tower(device_id)
@@ -316,7 +377,7 @@ def _tower_proxy_target(
                     f"tower {device_id} has no VPN IP yet (status={tower.status!r})",
                     device_id=device_id,
                 )
-            return f"http://{tower.vpn_ip}:{TOWER_GATEWAY_PORT}", tower.vpn_ip, None
+            return f"http://{tower.vpn_ip}:{_tower_gateway_port()}", tower.vpn_ip, None
         except NotFound:
             return None, None, _err(404, "not_found", f"unknown device_id {device_id!r}")
         except RegistryError as e:
@@ -324,7 +385,8 @@ def _tower_proxy_target(
         finally:
             reg.close()
 
-    if not HUB_PROXY_TOKEN:
+    token = _hub_proxy_token()
+    if not token:
         return None, None, _err(
             503, "hub_proxy_misconfigured",
             "KALLON_HUB_PROXY_TOKEN is unset on the control plane",
@@ -334,7 +396,7 @@ def _tower_proxy_target(
     if err is not None:
         return None, None, err
     assert hub_host is not None and vpn_ip is not None
-    base = f"http://{hub_host}:{HUB_PROXY_PORT}/proxy/{device_id}"
+    base = f"http://{hub_host}:{_hub_proxy_port()}/proxy/{device_id}"
     return base, vpn_ip, None
 
 
@@ -346,7 +408,8 @@ def _hls_proxy_url(device_id: str, camera: int, asset: str) -> tuple[Optional[st
             f"camera must be 1..16, got {camera}",
             device_id=device_id,
         )
-    if not HUB_PROXY_TOKEN:
+    token = _hub_proxy_token()
+    if not token:
         return None, None, _err(
             503, "hub_proxy_misconfigured",
             "KALLON_HUB_PROXY_TOKEN is unset on the control plane",
@@ -359,7 +422,7 @@ def _hls_proxy_url(device_id: str, camera: int, asset: str) -> tuple[Optional[st
     asset = asset.lstrip("/")
     if not asset:
         asset = "index.m3u8"
-    url = f"http://{hub_host}:{HUB_HLS_PORT}/hls/{device_id}/cam{camera}/{asset}"
+    url = f"http://{hub_host}:{_hub_hls_port()}/hls/{device_id}/cam{camera}/{asset}"
     return url, vpn_ip, None
 
 
@@ -370,16 +433,18 @@ async def _proxy(
     *,
     json_body: Optional[dict[str, Any]] = None,
     params: Optional[dict[str, Any]] = None,
-    read_timeout: float = PROXY_READ_TIMEOUT,
+    read_timeout: float | None = None,
 ) -> Response:
     base, vpn_ip, err = _tower_proxy_target(device_id)
     if err is not None:
         return err
     assert base is not None and vpn_ip is not None
-    timeout = httpx.Timeout(connect=PROXY_CONNECT_TIMEOUT, read=read_timeout, write=10.0, pool=5.0)
+    if read_timeout is None:
+        read_timeout = _proxy_read_timeout()
+    timeout = httpx.Timeout(connect=_proxy_connect_timeout(), read=read_timeout, write=10.0, pool=5.0)
     headers: dict[str, str] = {}
-    if PROXY_VIA_HUB:
-        headers["X-Kallon-Hub-Proxy-Token"] = HUB_PROXY_TOKEN
+    if _proxy_via_hub():
+        headers["X-Kallon-Hub-Proxy-Token"] = _hub_proxy_token()
         headers["X-Kallon-Tower-Vpn-Ip"] = vpn_ip
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
@@ -391,7 +456,7 @@ async def _proxy(
         return _err(
             503, "tower_offline",
             f"tower did not respond ({exc.__class__.__name__}) — "
-            + ("hub proxy unreachable or VPN tunnel down" if PROXY_VIA_HUB
+            + ("hub proxy unreachable or VPN tunnel down" if _proxy_via_hub()
                else "VPN tunnel down or tower rebooting"),
             device_id=device_id,
         )
@@ -457,7 +522,7 @@ async def snapshot(device_id: str, camera: int, request: Request):
     if (resp := _auth_check(request)) is not None:
         return resp
     return await _proxy(
-        device_id, "GET", f"/api/snapshot/cam{camera}", read_timeout=SNAPSHOT_READ_TIMEOUT
+        device_id, "GET", f"/api/snapshot/cam{camera}", read_timeout=_snapshot_read_timeout()
     )
 
 
@@ -566,9 +631,9 @@ async def _proxy_hls(device_id: str, camera: int, asset: str) -> Response:
     if err is not None:
         return err
     assert url is not None and vpn_ip is not None
-    timeout = httpx.Timeout(connect=PROXY_CONNECT_TIMEOUT, read=LIVE_READ_TIMEOUT, write=10.0, pool=5.0)
+    timeout = httpx.Timeout(connect=_proxy_connect_timeout(), read=_live_read_timeout(), write=10.0, pool=5.0)
     headers = {
-        "X-Kallon-Hub-Proxy-Token": HUB_PROXY_TOKEN,
+        "X-Kallon-Hub-Proxy-Token": _hub_proxy_token(),
         "X-Kallon-Tower-Vpn-Ip": vpn_ip,
     }
     try:
