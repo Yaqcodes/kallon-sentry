@@ -39,9 +39,6 @@ HUB_PROXY_TOKEN = os.environ.get("HUB_PROXY_TOKEN", "")
 MEDIAMTX_API = os.environ.get("MEDIAMTX_API", "http://127.0.0.1:9997").rstrip("/")
 MEDIAMTX_HLS = os.environ.get("MEDIAMTX_HLS", "http://127.0.0.1:8888").rstrip("/")
 TOWER_RTSP_PORT = int(os.environ.get("TOWER_RTSP_PORT", "8554"))
-# Buyer HLS pulls the tower's low-bitrate path (camN_sub). Main camN stays for
-# NVR / NOC. Override with HUB_HLS_TOWER_PATH_SUFFIX="" only for labs without subs.
-TOWER_HLS_PATH_SUFFIX = os.environ.get("HUB_HLS_TOWER_PATH_SUFFIX", "_sub")
 IDLE_CLOSE = os.environ.get("HUB_HLS_IDLE_CLOSE", "30s")
 PROXY_TIMEOUT_SEC = float(os.environ.get("HUB_HLS_READ_SEC", "60"))
 
@@ -75,22 +72,15 @@ def _http_json(method: str, url: str, body: Optional[dict] = None, timeout: floa
         return exc.code, exc.read() if exc.fp else b""
 
 
-def _tower_rtsp_path(cam: str) -> str:
-    """Tower MediaMTX path to pull for buyer HLS (default camN_sub)."""
-    suffix = TOWER_HLS_PATH_SUFFIX.strip()
-    return f"{cam}{suffix}" if suffix else cam
-
-
 def ensure_path(device_id: str, cam: str, vpn_ip: str) -> Optional[str]:
     """Ensure MediaMTX has an on-demand path pulling tower RTSP. Return error message or None.
 
-    If the hub path already exists, leave it alone. MediaMTX reloads config on
-    every API write; PATCHing per playlist/segment destroys the HLS muxer and
-    looks like RTP loss / DTS errors under dashboard load.
+    Pulls whatever the tower publishes at ``rtsp://{vpn}:{port}/{cam}`` (Jetson
+    chooses main vs sub via CAMERA_RTSP_PATH). If the hub path already exists,
+    leave it alone — MediaMTX reloads config on every API write.
     """
     name = _mtx_path_name(device_id, cam)
-    tower_path = _tower_rtsp_path(cam)
-    source = f"rtsp://{vpn_ip}:{TOWER_RTSP_PORT}/{tower_path}"
+    source = f"rtsp://{vpn_ip}:{TOWER_RTSP_PORT}/{cam}"
     conf = {
         "name": name,
         "source": source,
@@ -99,23 +89,10 @@ def ensure_path(device_id: str, cam: str, vpn_ip: str) -> Optional[str]:
         "sourceOnDemandCloseAfter": IDLE_CLOSE,
         "sourceProtocol": "tcp",
     }
-    get_code, get_body = _http_json(
+    get_code, _get_body = _http_json(
         "GET", f"{MEDIAMTX_API}/v3/config/paths/get/{quote(name, safe='')}"
     )
     if get_code == 200:
-        # Path exists — do not PATCH. (VPN IP changes are rare; delete the path
-        # or restart mediamtx after hub reprovision if the tower IP moves.)
-        try:
-            cur = json.loads(get_body.decode() or "{}")
-            cur_src = cur.get("source") if isinstance(cur, dict) else None
-        except (json.JSONDecodeError, AttributeError, TypeError):
-            cur_src = None
-        if isinstance(cur_src, str) and cur_src and cur_src != source:
-            log.warning(
-                "hub path %s source drift (have %s, want %s) — not auto-patching; "
-                "delete path or restart kallon-hub-mediamtx after cutover",
-                name, cur_src, source,
-            )
         return None
 
     add_code, add_body = _http_json(

@@ -139,23 +139,12 @@ render_yml() {
   require_var CAMERA_IPS
   default_var CAMERA_RTSP_USER admin
   # Quote values in device.env — bare & breaks bash `source` (background op).
-  default_var CAMERA_RTSP_PATH '/cam/realmonitor?channel=1&subtype=0'
-  # Buyer HLS / hub remux uses the substream path (camN_sub). Falls back to
-  # swapping subtype=0→1 when CAMERA_RTSP_PATH_SUB is unset.
-  default_var CAMERA_RTSP_PATH_SUB ''
+  # subtype=0 main / subtype=1 sub — hub remuxes whatever camN publishes.
+  default_var CAMERA_RTSP_PATH '/cam/realmonitor?channel=1&subtype=1'
   default_var CAMERA_PASSWORD 'CAM_PASSWORD'
   default_var RECORD_ENABLE 0
   resolve_record_path
   resolve_record_env
-
-  local sub_path="${CAMERA_RTSP_PATH_SUB}"
-  if [[ -z "$sub_path" ]]; then
-    if [[ "$CAMERA_RTSP_PATH" == *subtype=0* ]]; then
-      sub_path="${CAMERA_RTSP_PATH/subtype=0/subtype=1}"
-    else
-      sub_path="$CAMERA_RTSP_PATH"
-    fi
-  fi
 
   local -a cams; split_csv "$CAMERA_IPS" cams
 
@@ -173,12 +162,11 @@ render_yml() {
     echo "# integration surface stays RTSP over wg0 (see docs/alert-webhook.md)."
     echo "# RTMP/WebRTC rebroadcasts are disabled: the Kallon stack does not use"
     echo "# them, and leaving them on would egress camera video on extra ports."
-    echo "# camN = main (NVR/NOC); camN_sub = low-bitrate for hub HLS remux."
     echo "api: yes"
     echo "apiAddress: 127.0.0.1:9997"
     echo "hls: yes"
     echo "hlsAddress: 127.0.0.1:8888"
-    echo "hlsVariant: lowLatency"
+    echo "hlsVariant: mpegts"
     echo "rtmp: no"
     echo "webrtc: no"
     echo "paths:"
@@ -199,11 +187,6 @@ render_yml() {
         echo "    recordSegmentDuration: ${RECORD_MEDIAMTX_SEGMENT_FILE_DURATION}"
         echo "    recordDeleteAfter: ${RECORD_MEDIAMTX_DELETE_AFTER}"
       fi
-      # Substream for buyer live (hub remux). Always on-demand; never recorded.
-      echo "  cam${i}_sub:"
-      echo "    source: \"rtsp://${CAMERA_RTSP_USER}:${CAMERA_PASSWORD}@${ip}:554${sub_path}\""
-      echo "    sourceOnDemand: yes"
-      echo "    rtspTransport: tcp"
       i=$((i+1))
     done
   } > "$tmp"
@@ -216,7 +199,7 @@ render_yml() {
     rm -f "$tmp"
     local rec_note=""
     [[ "${RECORD_ENABLE}" == "1" ]] && rec_note=" (recording → ${RECORD_PATH}, delete after ${RECORD_MEDIAMTX_DELETE_AFTER})"
-    ok "rendered $MEDIAMTX_YML for ${#cams[@]} camera(s) + ${#cams[@]} sub path(s)${rec_note}"
+    ok "rendered $MEDIAMTX_YML for ${#cams[@]} camera(s)${rec_note}"
   fi
 }
 

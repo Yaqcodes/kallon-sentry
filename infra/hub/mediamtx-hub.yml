@@ -2,8 +2,8 @@
 # Kallon hub MediaMTX — RTSP remux → HLS
 #
 # Paths are created on demand by hls_proxy.py via the Control API.
-# RTSP publish is disabled; we only pull tower RTSP over wg0 and serve HLS
-# on loopback for the hub HLS agent (not public).
+# Prefer stable buffered HLS over low-latency (buyer dashboards tolerate
+# several seconds of delay; LL-HLS + WG loss = choppy video).
 ###############################################
 
 logLevel: info
@@ -17,10 +17,10 @@ apiAddress: 127.0.0.1:9997
 hls: yes
 hlsAddress: 127.0.0.1:8888
 hlsAlwaysRemux: yes
-hlsVariant: lowLatency
-hlsSegmentCount: 7
-hlsSegmentDuration: 1s
-hlsPartDuration: 200ms
+# mpegts = classic buffered HLS (not lowLatency).
+hlsVariant: mpegts
+hlsSegmentCount: 10
+hlsSegmentDuration: 4s
 hlsSegmentMaxSize: 50M
 hlsAllowOrigin: '*'
 
