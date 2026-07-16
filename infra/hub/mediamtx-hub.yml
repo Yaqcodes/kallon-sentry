@@ -2,8 +2,8 @@
 # Kallon hub MediaMTX — RTSP remux → HLS
 #
 # Paths are created on demand by hls_proxy.py via the Control API.
-# Prefer stable buffered HLS over low-latency (buyer dashboards tolerate
-# several seconds of delay; LL-HLS + WG loss = choppy video).
+# Balanced buffered HLS: short segments for lower lag, still mpegts
+# (not LL-HLS — that + WG loss caused choppy tiles).
 ###############################################
 
 logLevel: info
@@ -19,8 +19,8 @@ hlsAddress: 127.0.0.1:8888
 hlsAlwaysRemux: yes
 # mpegts = classic buffered HLS (not lowLatency).
 hlsVariant: mpegts
-hlsSegmentCount: 10
-hlsSegmentDuration: 4s
+hlsSegmentCount: 6
+hlsSegmentDuration: 2s
 hlsSegmentMaxSize: 50M
 hlsAllowOrigin: '*'
 
