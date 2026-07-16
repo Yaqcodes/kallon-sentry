@@ -191,6 +191,7 @@ issuer — remux stays on the hub either way.
 | `stream_starting` / empty playlist | Tower RTSP not ready, WG down, or first on-demand pull still spinning up |
 | 401 from hub | Token mismatch between Artemis env and `/etc/kallon/hub-proxy.env` |
 | Catalog OK, tiles black | H.265 substream — cameras need H.264 for Chromium HLS |
+| Brief play then `hls_error` / RTP loss / DTS | Hub remuxing **main** 1440p over WG, or HLS agent PATCHing MediaMTX every request. Tower must publish `camN_sub` (subtype=1); hub pulls that. Deploy latest `hls_proxy.py` (no PATCH). |
 
 Health checks on hub:
 
