@@ -73,33 +73,48 @@ def _http_json(method: str, url: str, body: Optional[dict] = None, timeout: floa
 
 
 def ensure_path(device_id: str, cam: str, vpn_ip: str) -> Optional[str]:
-    """Ensure MediaMTX has an on-demand path pulling tower RTSP. Return error message or None."""
+    """Ensure MediaMTX has an on-demand path pulling tower RTSP. Return error message or None.
+
+    Do **not** PATCH an existing path on every playlist/segment hit — MediaMTX
+    reloads config on each API write, which tears down the HLS muxer and shows
+    up as RTP loss / DTS errors under dashboard polling.
+    """
     name = _mtx_path_name(device_id, cam)
     source = f"rtsp://{vpn_ip}:{TOWER_RTSP_PORT}/{cam}"
     conf = {
         "name": name,
         "source": source,
         "sourceOnDemand": True,
-        "sourceOnDemandStartTimeout": "10s",
+        "sourceOnDemandStartTimeout": "15s",
         "sourceOnDemandCloseAfter": IDLE_CLOSE,
         "rtspTransport": "tcp",
     }
-    # Already configured?
-    code, _ = _http_json("GET", f"{MEDIAMTX_API}/v3/config/paths/get/{quote(name, safe='')}")
-    if code == 200:
+    get_code, get_body = _http_json(
+        "GET", f"{MEDIAMTX_API}/v3/config/paths/get/{quote(name, safe='')}"
+    )
+    if get_code == 200:
+        # Only rewrite if the RTSP URL drifted (rare: VPN IP reallocation).
+        try:
+            cur = json.loads(get_body.decode() or "{}")
+            cur_src = (cur.get("source") or cur.get("conf", {}).get("source") or "")
+        except (json.JSONDecodeError, AttributeError, TypeError):
+            cur_src = ""
+        if isinstance(cur_src, str) and cur_src == source:
+            return None
         patch_code, patch_body = _http_json(
             "PATCH",
             f"{MEDIAMTX_API}/v3/config/paths/patch/{quote(name, safe='')}",
             {
                 "source": source,
                 "sourceOnDemand": True,
-                "sourceOnDemandStartTimeout": "10s",
+                "sourceOnDemandStartTimeout": "15s",
                 "sourceOnDemandCloseAfter": IDLE_CLOSE,
                 "rtspTransport": "tcp",
             },
         )
         if patch_code >= 400:
             return f"mediamtx path patch failed ({patch_code}): {patch_body[:200]!r}"
+        log.info("updated MediaMTX path %s → %s", name, source)
         return None
 
     add_code, add_body = _http_json(
