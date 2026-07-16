@@ -20,7 +20,12 @@ Examples:
       --host 203.0.113.42 --ssh-user ubuntu --subnet 10.50.0.0/24
   python infra/hub-provisioner/cli.py cust_acme --provider lightsail \
       --region us-east-2 --subnet 10.51.0.0/24
+  python infra/hub-provisioner/cli.py cust_lab --provider lightsail \
+      --region us-east-2 --instance-name kallon-gateway-lab
   python infra/hub-provisioner/cli.py cust_lab --provider manual --host x --dry-run
+
+Lightsail re-runs adopt an existing hub (by --instance-name, registry hub_host_id,
+gateway_endpoint IP, customer tag, or canonical kallon-hub-<id>) before creating.
 """
 from __future__ import annotations
 
@@ -59,7 +64,10 @@ def main(argv=None) -> int:
     p.add_argument("customer_id", help="cust_<slug>")
     p.add_argument("--provider", default="manual", choices=["manual", "lightsail"])
     p.add_argument("--region", default=None)
-    p.add_argument("--host", default=None, help="existing host (manual provider)")
+    p.add_argument("--host", default=None,
+                   help="manual: SSH host IP/DNS; lightsail: optional instance name")
+    p.add_argument("--instance-name", default=None,
+                   help="Lightsail instance name to adopt (e.g. kallon-gateway-lab)")
     p.add_argument("--ssh-user", default="ubuntu")
     p.add_argument("--subnet", default=None, help="create customer with this /24 if new")
     p.add_argument("--display-name", default=None)
@@ -88,10 +96,18 @@ def main(argv=None) -> int:
         if args.display_name:
             reg.update_customer_hub(args.customer_id, display_name=args.display_name)
 
-        # 2. provision host
+        # 2. provision host (Lightsail adopts existing hub when registry/IP/name match)
         prov = _provider(args.provider, args.region)
-        host = prov.provision(args.customer_id, host=args.host, ssh_user=args.ssh_user,
-                              region=args.region, dry_run=args.dry_run)
+        host = prov.provision(
+            args.customer_id,
+            host=args.host,
+            instance_name=args.instance_name,
+            hub_host_id=cust.hub_host_id,
+            gateway_endpoint=cust.gateway_endpoint,
+            ssh_user=args.ssh_user,
+            region=args.region,
+            dry_run=args.dry_run,
+        )
         print(f"[provision] host={host.public_ip} id={host.host_id} provider={host.provider}",
               file=sys.stderr)
 

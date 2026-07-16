@@ -108,7 +108,8 @@ $hub = "18.220.75.237"   # from registry get-customer
 
 # 1. Lightsail firewall (replaces full port set)
 cd $repo
-python infra/hub-provisioner/sync_lightsail_ports.py kallon-hub-cust_lab --region us-east-2
+python infra/hub-provisioner/sync_lightsail_ports.py kallon-gateway-lab --region us-east-2
+# (or the canonical name kallon-hub-cust_<id> for hubs created by the provisioner)
 
 # 2. Install MediaMTX + HLS agent on hub
 scp -i $pem `
