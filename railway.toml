@@ -1,0 +1,20 @@
+# Railway config for Kallon control plane (enrollment + Platform API).
+# Docs: docs/railway-control-plane.md
+#
+# In Railway UI: New Project → Deploy from GitHub → select this repo,
+# set Root Directory blank (repo root), connect a Postgres plugin,
+# then set env vars from env.example.
+
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+# Idempotent (CREATE IF NOT EXISTS). Safe on every deploy.
+releaseCommand = "cd /app && python -m registry.cli init-schema"
+healthcheckPath = "/healthz"
+healthcheckTimeout = 30
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 5
+# Confirm tokens + alert SSE are in-memory — keep a single replica.
+numReplicas = 1

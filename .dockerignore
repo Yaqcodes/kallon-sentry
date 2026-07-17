@@ -1,0 +1,32 @@
+.git
+.tmp*
+**/.venv
+**/venv
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+**/node_modules
+**/.mypy_cache
+**/.ruff_cache
+*.pem
+*.key
+.env
+.env.*
+!.env.example
+
+# Keep image small — only enrollment-api + registry + add-peer script are copied
+# explicitly in the Dockerfile. Ignore the rest of the monorepo noise.
+docs/
+tests/
+deploy/
+infra/hub/
+infra/hub-provisioner/
+infra/fulfillment/
+infra/alert-listener/
+scripts/*
+!scripts/kallon-gateway-add-peer.sh
+sentinel-dashboard/
+sentinel-sdk/
+sentinel-sdk-tmp/
+*.md
+!infra/enrollment-api/deploy/railway/**

@@ -434,6 +434,10 @@ Ops ──DATABASE_URL──► same Postgres
 
 Move `DATABASE_URL` and deploy `infra/enrollment-api`; ops runs from laptop.
 
+**Implemented path:** branch `railway` — see [`docs/railway-control-plane.md`](railway-control-plane.md)
+(Dockerfile, `railway.toml`, entrypoint that materializes the ops SSH key, single-replica
+deploy). Hub provisioning stays on a laptop; peer-add still SSHes out to Lightsail hubs.
+
 ---
 
 Set enrollment URL for all factory output:
