@@ -15,7 +15,7 @@ Env:
   MEDIAMTX_API            default http://127.0.0.1:9997
   MEDIAMTX_HLS            default http://127.0.0.1:8888
   TOWER_RTSP_PORT         default 8554
-  HUB_HLS_IDLE_CLOSE      MediaMTX sourceOnDemandCloseAfter (default 30s)
+  HUB_HLS_IDLE_CLOSE      MediaMTX sourceOnDemandCloseAfter (default 90s)
   HUB_HLS_READ_SEC        forward read timeout (default 60)
 """
 from __future__ import annotations
@@ -24,6 +24,7 @@ import json
 import logging
 import os
 import re
+import time
 import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -39,7 +40,8 @@ HUB_PROXY_TOKEN = os.environ.get("HUB_PROXY_TOKEN", "")
 MEDIAMTX_API = os.environ.get("MEDIAMTX_API", "http://127.0.0.1:9997").rstrip("/")
 MEDIAMTX_HLS = os.environ.get("MEDIAMTX_HLS", "http://127.0.0.1:8888").rstrip("/")
 TOWER_RTSP_PORT = int(os.environ.get("TOWER_RTSP_PORT", "8554"))
-IDLE_CLOSE = os.environ.get("HUB_HLS_IDLE_CLOSE", "30s")
+# Keep remux warm across brief player stalls / tab blips (was 30s — caused cold starts).
+IDLE_CLOSE = os.environ.get("HUB_HLS_IDLE_CLOSE", "90s")
 PROXY_TIMEOUT_SEC = float(os.environ.get("HUB_HLS_READ_SEC", "60"))
 
 _TOKEN_HEADER = "X-Kallon-Hub-Proxy-Token"
@@ -113,11 +115,24 @@ class Handler(BaseHTTPRequestHandler):
     server_version = "kallon-hub-hls/1.0"
     protocol_version = "HTTP/1.1"
 
-    def _reply(self, status: int, body: bytes, content_type: str = "application/json") -> None:
+    def _reply(
+        self,
+        status: int,
+        body: bytes,
+        content_type: str = "application/json",
+        *,
+        extra_headers: dict[str, str] | None = None,
+    ) -> None:
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
+        # Live media must never be cached by browsers, CDNs, or intermediate proxies.
+        self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+        self.send_header("Pragma", "no-cache")
+        self.send_header("Expires", "0")
+        if extra_headers:
+            for k, v in extra_headers.items():
+                self.send_header(k, v)
         self.end_headers()
         self.wfile.write(body)
 
@@ -188,13 +203,25 @@ class Handler(BaseHTTPRequestHandler):
             qs = "?" + self.path.split("?", 1)[1]
         target = f"{MEDIAMTX_HLS}/{mtx_name}{rest}{qs}"
 
+        t0 = time.perf_counter()
         try:
             req = urllib.request.Request(target, method="GET")
             with urllib.request.urlopen(req, timeout=PROXY_TIMEOUT_SEC) as resp:  # noqa: S310
                 payload = resp.read()
                 ct = resp.headers.get("Content-Type", "application/octet-stream")
-                self._reply(resp.status, payload, content_type=ct)
+                upstream_ms = (time.perf_counter() - t0) * 1000.0
+                self._reply(
+                    resp.status,
+                    payload,
+                    content_type=ct,
+                    extra_headers={
+                        "X-Kallon-Upstream-Ms": f"{upstream_ms:.1f}",
+                        "X-Kallon-Total-Ms": f"{upstream_ms:.1f}",
+                        "Server-Timing": f"mediamtx;dur={upstream_ms:.1f}",
+                    },
+                )
         except urllib.error.HTTPError as exc:
+            upstream_ms = (time.perf_counter() - t0) * 1000.0
             payload = exc.read() if exc.fp else b""
             # MediaMTX may 404 until the on-demand RTSP source is ready — soft 503 for Artemis.
             if exc.code == 404:
@@ -206,6 +233,10 @@ class Handler(BaseHTTPRequestHandler):
                         device_id=device_id,
                         camera=cam,
                     ),
+                    extra_headers={
+                        "X-Kallon-Upstream-Ms": f"{upstream_ms:.1f}",
+                        "Server-Timing": f"mediamtx;dur={upstream_ms:.1f}",
+                    },
                 )
                 return
             ct = exc.headers.get("Content-Type", "application/json") if exc.headers else "application/json"
@@ -213,8 +244,13 @@ class Handler(BaseHTTPRequestHandler):
                 exc.code,
                 payload or _err_body("hls_error", str(exc.reason), device_id=device_id),
                 ct,
+                extra_headers={
+                    "X-Kallon-Upstream-Ms": f"{upstream_ms:.1f}",
+                    "Server-Timing": f"mediamtx;dur={upstream_ms:.1f}",
+                },
             )
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            upstream_ms = (time.perf_counter() - t0) * 1000.0
             log.warning("HLS forward failed %s: %s", target, exc)
             self._reply(
                 503,
@@ -223,6 +259,10 @@ class Handler(BaseHTTPRequestHandler):
                     f"HLS unreachable ({type(exc).__name__}) — MediaMTX down or tower RTSP offline",
                     device_id=device_id,
                 ),
+                extra_headers={
+                    "X-Kallon-Upstream-Ms": f"{upstream_ms:.1f}",
+                    "Server-Timing": f"mediamtx;dur={upstream_ms:.1f}",
+                },
             )
 
     def log_message(self, *args) -> None:

@@ -202,6 +202,11 @@ if _cors_origins:
         allow_credentials=False,
         allow_methods=["*"],
         allow_headers=["*"],
+        expose_headers=[
+            "X-Kallon-Proxy-Ms",
+            "X-Kallon-Hub-Upstream-Ms",
+            "Server-Timing",
+        ],
     )
 else:
     log.info("CORS disabled — set KALLON_CORS_ORIGINS for Vercel/browser dashboards")

@@ -29,6 +29,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import time
 from typing import Any, Optional
 
 import httpx
@@ -649,10 +650,12 @@ async def _proxy_hls(device_id: str, camera: int, asset: str) -> Response:
         "X-Kallon-Hub-Proxy-Token": _hub_proxy_token(),
         "X-Kallon-Tower-Vpn-Ip": vpn_ip,
     }
+    t0 = time.perf_counter()
     try:
         resp = await _http_client().get(url, headers=headers, timeout=timeout)
     except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout, httpx.NetworkError) as exc:
-        log.warning("live %s cam%s unreachable at %s: %s", device_id, camera, url, exc)
+        elapsed_ms = (time.perf_counter() - t0) * 1000.0
+        log.warning("live %s cam%s unreachable at %s after %.0fms: %s", device_id, camera, url, elapsed_ms, exc)
         return _err(
             503, "tower_offline",
             f"hub HLS unreachable ({exc.__class__.__name__}) — "
@@ -660,16 +663,43 @@ async def _proxy_hls(device_id: str, camera: int, asset: str) -> Response:
             device_id=device_id,
         )
 
+    elapsed_ms = (time.perf_counter() - t0) * 1000.0
+    hub_upstream = resp.headers.get("x-kallon-upstream-ms") or resp.headers.get("X-Kallon-Upstream-Ms")
     content_type = resp.headers.get("content-type", "application/octet-stream")
     # Pass through hub JSON errors (stream_starting, etc.)
+    out_headers = {
+        # Live HLS: never cache playlists or segments.
+        "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+        "Pragma": "no-cache",
+        "Expires": "0",
+        "X-Kallon-Proxy-Ms": f"{elapsed_ms:.1f}",
+        "Server-Timing": f"hub_proxy;dur={elapsed_ms:.1f}",
+        "Access-Control-Expose-Headers": (
+            "X-Kallon-Proxy-Ms, X-Kallon-Hub-Upstream-Ms, Server-Timing"
+        ),
+    }
+    if hub_upstream:
+        out_headers["X-Kallon-Hub-Upstream-Ms"] = hub_upstream
+        out_headers["Server-Timing"] = (
+            f"hub_proxy;dur={elapsed_ms:.1f}, mediamtx;dur={hub_upstream}"
+        )
+    log.info(
+        "live %s cam%s asset=%s status=%s proxy_ms=%.1f hub_upstream_ms=%s bytes=%d",
+        device_id, camera, asset, resp.status_code, elapsed_ms, hub_upstream, len(resp.content),
+    )
     if content_type.startswith("application/json") and resp.status_code >= 400:
-        return Response(content=resp.content, status_code=resp.status_code, media_type=content_type)
+        return Response(
+            content=resp.content,
+            status_code=resp.status_code,
+            media_type=content_type,
+            headers=out_headers,
+        )
 
     return Response(
         content=resp.content,
         status_code=resp.status_code,
         media_type=content_type,
-        headers={"Cache-Control": "no-store"},
+        headers=out_headers,
     )
 
 

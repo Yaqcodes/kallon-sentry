@@ -61,8 +61,17 @@ On first playlist request the agent:
 
 1. Validates the hub token + tower VPN IP header  
 2. `POST/PATCH` MediaMTX path `{device_id}_camN` with  
-   `source: rtsp://{vpn_ip}:8554/camN`, `sourceOnDemand: true`, idle close ~30s  
+   `source: rtsp://{vpn_ip}:8554/camN`, `sourceOnDemand: true`, idle close ~90s  
 3. Proxies `http://127.0.0.1:8888/{device_id}_camN/...` back to Artemis  
+
+**Caching:** Live playlists and segments are **not** HTTP-cached. Hub and Platform
+API send `Cache-Control: no-store`. MediaMTX only keeps a short rolling HLS
+window on disk (`hlsSegmentCount` × duration) for the active remux — that is
+not a CDN/browser cache.
+
+**Latency knobs (steady mpegts, not LL-HLS):** hub `hlsSegmentDuration: 2s`,
+`hlsSegmentCount: 4`; dashboard hls.js `liveSyncDurationCount: 1`,
+`maxBufferLength: 4`, jump-to-live if >4s behind.
 
 ### Control plane (Platform API)
 

@@ -80,6 +80,7 @@ Type=simple
 EnvironmentFile=/etc/kallon/hub-proxy.env
 Environment=HUB_HLS_BIND=${HUB_HLS_BIND}
 Environment=HUB_HLS_PORT=${HUB_HLS_PORT}
+Environment=HUB_HLS_IDLE_CLOSE=90s
 Environment=MEDIAMTX_API=http://127.0.0.1:9997
 Environment=MEDIAMTX_HLS=http://127.0.0.1:8888
 Environment=TOWER_RTSP_PORT=8554
