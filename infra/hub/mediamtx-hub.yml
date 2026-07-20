@@ -2,8 +2,8 @@
 # Kallon hub MediaMTX — RTSP remux → HLS
 #
 # Paths are created on demand by hls_proxy.py via the Control API.
-# Steady + low lag: short mpegts segments (not LL-HLS — that + WG loss
-# caused choppy tiles). 2s × 4 ≈ 8s playlist window; player aims ~1 segment.
+# Steady playback: 2s mpegts segments, 6-segment playlist (~12s window).
+# Player keeps a deeper buffer — lag is higher but fewer freezes on Railway/WG jitter.
 ###############################################
 
 logLevel: info
@@ -19,7 +19,7 @@ hlsAddress: 127.0.0.1:8888
 hlsAlwaysRemux: yes
 # mpegts = classic buffered HLS (not lowLatency).
 hlsVariant: mpegts
-hlsSegmentCount: 4
+hlsSegmentCount: 6
 hlsSegmentDuration: 2s
 hlsSegmentMaxSize: 50M
 hlsAllowOrigin: '*'

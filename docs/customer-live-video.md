@@ -70,8 +70,8 @@ window on disk (`hlsSegmentCount` × duration) for the active remux — that is
 not a CDN/browser cache.
 
 **Latency knobs (steady mpegts, not LL-HLS):** hub `hlsSegmentDuration: 2s`,
-`hlsSegmentCount: 4`; dashboard hls.js `liveSyncDurationCount: 1`,
-`maxBufferLength: 4`, jump-to-live if >4s behind.
+`hlsSegmentCount: 6`; dashboard hls.js `liveSyncDurationCount: 3`,
+`maxBufferLength: 12`, hard jump-to-live only if >12s behind.
 
 ### Control plane (Platform API)
 
