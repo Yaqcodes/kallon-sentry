@@ -69,9 +69,9 @@ API send `Cache-Control: no-store`. MediaMTX only keeps a short rolling HLS
 window on disk (`hlsSegmentCount` × duration) for the active remux — that is
 not a CDN/browser cache.
 
-**Latency knobs (steady mpegts, not LL-HLS):** hub `hlsSegmentDuration: 2s`,
-`hlsSegmentCount: 4`; dashboard hls.js `liveSyncDurationCount: 1`,
-`maxBufferLength: 4`, jump-to-live if >4s behind.
+**Latency knobs (steady mpegts, not LL-HLS):** hub `hlsSegmentDuration: 1s`,
+`hlsSegmentCount: 3`; dashboard hls.js `liveSyncDuration: 1`,
+`maxBufferLength: 2.5`, jump-to-live if >2s behind.
 
 ### Control plane (Platform API)
 
