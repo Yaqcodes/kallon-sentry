@@ -1,34 +1,28 @@
 ###############################################
 # Kallon hub MediaMTX — RTSP remux → HLS
 #
-# Paths are created on demand by hls_proxy.py via the Control API.
-# Steady playback: 2s mpegts segments, 6-segment playlist (~12s window).
-# Player keeps a deeper buffer — lag is higher but fewer freezes on Railway/WG jitter.
+# NVR-style buffered HLS: 4s mpegts segments (not LL-HLS). Long playlist
+# window + always-on RTSP pull = smooth buyer tiles over lossy WireGuard.
 ###############################################
 
 logLevel: info
 logDestinations: [stdout]
 
-# Control API — loopback only (hls_proxy uses this to add paths).
 api: yes
 apiAddress: 127.0.0.1:9997
 
-# HLS for Platform API via hls_proxy (never bind public).
 hls: yes
 hlsAddress: 127.0.0.1:8888
 hlsAlwaysRemux: yes
-# mpegts = classic buffered HLS (not lowLatency).
 hlsVariant: mpegts
-hlsSegmentCount: 6
-hlsSegmentDuration: 2s
+hlsSegmentCount: 10
+hlsSegmentDuration: 4s
 hlsSegmentMaxSize: 50M
 hlsAllowOrigin: '*'
 
-# No public RTSP relay on the hub (NOC still uses tower :8554 over WG).
 rtsp: no
 rtmp: no
 webrtc: no
 srt: no
 
-# Empty — hls_proxy adds {device_id}_camN paths at runtime.
 paths: {}

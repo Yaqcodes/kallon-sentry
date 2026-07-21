@@ -121,7 +121,7 @@ def _snapshot_read_timeout() -> float:
 
 
 def _live_read_timeout() -> float:
-    return _env_float("KALLON_LIVE_READ_TIMEOUT", 60.0)
+    return _env_float("KALLON_LIVE_READ_TIMEOUT", 90.0)
 
 
 # Back-compat aliases used by older tests/docs that import module-level names.

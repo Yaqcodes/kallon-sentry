@@ -86,9 +86,8 @@ def ensure_path(device_id: str, cam: str, vpn_ip: str) -> Optional[str]:
     conf = {
         "name": name,
         "source": source,
-        "sourceOnDemand": True,
-        "sourceOnDemandStartTimeout": "15s",
-        "sourceOnDemandCloseAfter": IDLE_CLOSE,
+        # Always pull RTSP once path exists — avoids cold-start freezes between segments.
+        "sourceOnDemand": False,
         "sourceProtocol": "tcp",
     }
     get_code, _get_body = _http_json(
