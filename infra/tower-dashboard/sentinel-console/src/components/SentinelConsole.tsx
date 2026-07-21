@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { Camera, CameraStatus } from '../types';
 import { colors, font } from '../tokens';
+import { formatClockUTC1 } from '../clock';
 import { health, levelColor } from '../util';
 import { buildSensors } from '../sensors';
 import { ptz, snapshot, getRecording, setRecording } from '../api';
@@ -277,7 +278,7 @@ export default function SentinelConsole() {
     return () => window.removeEventListener('keydown', onEsc);
   }, [panelOpen]);
 
-  const utc = new Date(now).toISOString().slice(11, 19);
+  const utc = formatClockUTC1(now);
   const loading = cameras.length === 0;
 
   return (
@@ -302,7 +303,7 @@ export default function SentinelConsole() {
 
         <div style={{ marginLeft: 'auto', textAlign: 'right' }}>
           <div style={{ fontFamily: font.mono, fontSize: 19, color: colors.textBright, letterSpacing: '.06em' }}>{utc}</div>
-          <div style={{ fontFamily: font.mono, fontSize: 10, letterSpacing: '.16em', color: colors.textFaint }}>UTC · {connected ? 'LINK OK' : 'NO LINK'}</div>
+          <div style={{ fontFamily: font.mono, fontSize: 10, letterSpacing: '.16em', color: colors.textFaint }}>UTC+1 · {connected ? 'LINK OK' : 'NO LINK'}</div>
         </div>
       </header>
 

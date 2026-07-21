@@ -364,6 +364,98 @@ mediamtx unreachable:
 {"available": false, "error": "URLError: timed out", "paths": []}
 ```
 
+### GET / PUT /v1/towers/{device_id}/recording
+
+Continuous NVR toggle (MediaMTX + `RECORD_ENABLE` persist on tower). Proxied to
+tower `GET|PUT /api/recording`.
+
+### GET /v1/towers/{device_id}/recording (response excerpt)
+
+```json
+{
+  "enabled": true,
+  "segment_duration": "15m",
+  "delete_after": "168h",
+  "upload": {"available": true, "pending": 2, "last_upload_at": "2026-07-15T12:30:00Z"}
+}
+```
+
+---
+
+## 3c. Cloud recordings (S3)
+
+Tower upload workers (`scripts/kallon-recording-uploader.py`) write 15-minute
+fMP4 segments to NVMe, upload to a shared **Backblaze B2** bucket (S3-compatible),
+register metadata here, then delete local copies only after verified upload.
+
+Object layout: `{device_id}/cam{N}/{filename}.mp4`
+
+**Tenant isolation:** list/playback/delete routes are scoped by `customer_id`.
+A buyer session must only query its own customer prefix.
+
+**Retention:** default **30 days** (`platform_config.recording_retention_days` or
+`KALLON_RECORDING_RETENTION_DAYS` on Platform).
+
+### POST /v1/recordings/ingest (tower → platform)
+
+Optional gate: `KALLON_RECORDING_INGEST_TOKEN` / `X-Kallon-Ingest-Token` (same
+pattern as alert ingest).
+
+```json
+{
+  "device_id": "kln_acme_000042",
+  "camera": 1,
+  "filename": "2026-07-15_12-00-00-000000.mp4",
+  "s3_bucket": "kallon-recordings",
+  "s3_key": "kln_acme_000042/cam1/2026-07-15_12-00-00-000000.mp4",
+  "size_bytes": 52428800,
+  "sha256_hex": "…",
+  "started_at": "2026-07-15T12:00:00Z",
+  "ended_at": "2026-07-15T12:15:00Z",
+  "duration_sec": 900
+}
+```
+
+### GET /v1/customers/{customer_id}/recordings
+
+Query: `device_id`, `camera`, `from_ts`, `to_ts`, `limit`, `offset`.
+
+```json
+{
+  "customer_id": "cust_acme",
+  "retention_days": 30,
+  "segments": [
+    {
+      "segment_id": "…",
+      "device_id": "kln_acme_000042",
+      "camera": 1,
+      "filename": "2026-07-15_12-00-00-000000.mp4",
+      "size_bytes": 52428800,
+      "started_at": "2026-07-15T12:00:00+00:00",
+      "duration_sec": 900
+    }
+  ]
+}
+```
+
+### GET …/recordings/{segment_id}/playback | /download
+
+Returns a presigned B2/S3 URL (requires Platform credentials:
+`KALLON_S3_BUCKET`, `KALLON_S3_ENDPOINT`, `KALLON_S3_REGION`, `AWS_ACCESS_KEY_ID`,
+`AWS_SECRET_ACCESS_KEY`).
+
+```json
+{"segment_id": "…", "url": "https://…", "expires_in": 3600}
+```
+
+### DELETE …/recordings/{segment_id}
+
+Deletes S3 object (when configured) and registry row.
+
+### GET|PUT /v1/platform/recording-retention
+
+Read or update global retention days (default 30).
+
 ---
 
 ## 3b. Live video (HLS via hub remux)
@@ -574,6 +666,8 @@ Deploy / migrate hubs with `scripts/kallon-gateway-ensure-tower-proxy.sh`.
 | GET | `/api/ptz/status?camera=n` | |
 | GET | `/api/status` | Watchdog proxy |
 | GET | `/api/streams` | mediamtx proxy |
+| GET | `/api/recording` | NVR status + upload queue |
+| PUT | `/api/recording` | Enable/disable continuous recording |
 | GET | `/healthz` | |
 
 Gateway binding: `DASH_BIND=wg0` resolves the WireGuard interface address at

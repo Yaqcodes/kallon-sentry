@@ -32,6 +32,40 @@ class Customer:
 
 
 @dataclass
+class RecordingSegment:
+    segment_id: str
+    customer_id: str
+    device_id: str
+    camera: int
+    filename: str
+    s3_bucket: str
+    s3_key: str
+    size_bytes: int
+    started_at: datetime
+    sha256_hex: Optional[str] = None
+    ended_at: Optional[datetime] = None
+    uploaded_at: Optional[datetime] = None
+    duration_sec: Optional[int] = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "segment_id": self.segment_id,
+            "customer_id": self.customer_id,
+            "device_id": self.device_id,
+            "camera": self.camera,
+            "filename": self.filename,
+            "s3_bucket": self.s3_bucket,
+            "s3_key": self.s3_key,
+            "size_bytes": self.size_bytes,
+            "sha256_hex": self.sha256_hex,
+            "started_at": self.started_at.isoformat() if self.started_at else None,
+            "ended_at": self.ended_at.isoformat() if self.ended_at else None,
+            "uploaded_at": self.uploaded_at.isoformat() if self.uploaded_at else None,
+            "duration_sec": self.duration_sec,
+        }
+
+
+@dataclass
 class Tower:
     device_id: str
     customer_id: str
@@ -140,6 +174,40 @@ class RegistryProvider(ABC):
         actor: Optional[str] = None,
         payload_json: Optional[str] = None,
     ) -> None: ...
+
+    # ── recordings (S3 segment registry) ───────────────────────────────────
+    @abstractmethod
+    def upsert_recording_segment(self, segment: RecordingSegment) -> RecordingSegment: ...
+
+    @abstractmethod
+    def get_recording_segment(self, segment_id: str) -> RecordingSegment: ...
+
+    @abstractmethod
+    def delete_recording_segment(self, segment_id: str) -> RecordingSegment: ...
+
+    @abstractmethod
+    def list_recording_segments(
+        self,
+        *,
+        customer_id: str,
+        device_id: Optional[str] = None,
+        camera: Optional[int] = None,
+        started_after: Optional[datetime] = None,
+        started_before: Optional[datetime] = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[RecordingSegment]: ...
+
+    @abstractmethod
+    def list_expired_recording_segments(
+        self, *, retention_days: int, limit: int = 200
+    ) -> list[RecordingSegment]: ...
+
+    @abstractmethod
+    def get_platform_config(self, key: str) -> Optional[str]: ...
+
+    @abstractmethod
+    def set_platform_config(self, key: str, value: str) -> None: ...
 
     # ── shared helpers (non-abstract) ────────────────────────────────────────
     @staticmethod

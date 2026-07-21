@@ -3,6 +3,7 @@ import type { AlertEvent, AlertLevel } from './types';
 import {
   type ConfigResponse, type GwAlert, type StatusResponse, type StreamsResponse,
 } from './api';
+import { formatDateTimeUTC1 } from '../clock';
 
 const STREAMS_POLL_MS = 3000;
 const STREAMS_POLL_HIDDEN_MS = 8000;
@@ -19,21 +20,18 @@ function severityLevel(sev: string): AlertLevel {
   return 'good';
 }
 
-function fmtClock(iso?: string | null): string {
-  if (!iso) return '';
-  try { return new Date(iso).toLocaleTimeString([], { hour12: false }); } catch { return iso; }
-}
-
 function alertKey(a: GwAlert): string {
   return a.nonce || `${a.alert_type}|${a.timestamp_utc || ''}|${a.received_utc || ''}`;
 }
 
 function toAlertEvent(a: GwAlert, key: string): AlertEvent {
+  const timestampUtc = a.timestamp_utc ?? a.received_utc ?? null;
   return {
     id: key,
     type: a.alert_type,
     level: severityLevel(a.severity),
-    time: fmtClock(a.timestamp_utc || a.received_utc),
+    timestampUtc,
+    time: timestampUtc ? formatDateTimeUTC1(timestampUtc) : '',
     payload: a.details ?? {},
   };
 }

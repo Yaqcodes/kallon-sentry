@@ -10,12 +10,14 @@ from __future__ import annotations
 import json
 import sqlite3
 from datetime import datetime, timezone
-from typing import Optional
+from datetime import datetime
+from typing import Any, Optional
 
 from .interface import (
     Conflict,
     Customer,
     NotFound,
+    RecordingSegment,
     RegistryProvider,
     SubnetExhausted,
     Tower,
@@ -61,6 +63,33 @@ CREATE TABLE IF NOT EXISTS audit_events (
     payload_json TEXT,
     created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS platform_config (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+INSERT OR IGNORE INTO platform_config (key, value, updated_at)
+VALUES ('recording_retention_days', '30', datetime('now'));
+CREATE TABLE IF NOT EXISTS recording_segments (
+    segment_id TEXT PRIMARY KEY,
+    customer_id TEXT NOT NULL REFERENCES customers(customer_id),
+    device_id TEXT NOT NULL REFERENCES towers(device_id),
+    camera INTEGER NOT NULL,
+    filename TEXT NOT NULL,
+    s3_bucket TEXT NOT NULL,
+    s3_key TEXT NOT NULL,
+    size_bytes INTEGER NOT NULL,
+    sha256_hex TEXT,
+    started_at TEXT NOT NULL,
+    ended_at TEXT,
+    uploaded_at TEXT NOT NULL,
+    duration_sec INTEGER,
+    UNIQUE (device_id, camera, filename)
+);
+CREATE INDEX IF NOT EXISTS idx_recording_segments_customer_started
+    ON recording_segments (customer_id, started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_recording_segments_device_cam_started
+    ON recording_segments (device_id, camera, started_at DESC);
 """
 
 _CUSTOMER_COLS = [
@@ -252,6 +281,143 @@ class SQLiteRegistry(RegistryProvider):
         )
         self._conn.commit()
 
+    # ── recordings ───────────────────────────────────────────────────────────
+    def upsert_recording_segment(self, segment: RecordingSegment) -> RecordingSegment:
+        cols = [
+            "segment_id", "customer_id", "device_id", "camera", "filename",
+            "s3_bucket", "s3_key", "size_bytes", "sha256_hex", "started_at",
+            "ended_at", "uploaded_at", "duration_sec",
+        ]
+        values = [
+            segment.segment_id,
+            segment.customer_id,
+            segment.device_id,
+            segment.camera,
+            segment.filename,
+            segment.s3_bucket,
+            segment.s3_key,
+            segment.size_bytes,
+            segment.sha256_hex,
+            segment.started_at.isoformat(),
+            segment.ended_at.isoformat() if segment.ended_at else None,
+            (segment.uploaded_at or datetime.now(timezone.utc)).isoformat(),
+            segment.duration_sec,
+        ]
+        try:
+            self._conn.execute(
+                f"""
+                INSERT INTO recording_segments ({', '.join(cols)})
+                VALUES ({', '.join(['?'] * len(cols))})
+                ON CONFLICT(device_id, camera, filename) DO UPDATE SET
+                    s3_bucket=excluded.s3_bucket,
+                    s3_key=excluded.s3_key,
+                    size_bytes=excluded.size_bytes,
+                    sha256_hex=excluded.sha256_hex,
+                    started_at=excluded.started_at,
+                    ended_at=excluded.ended_at,
+                    uploaded_at=excluded.uploaded_at,
+                    duration_sec=excluded.duration_sec
+                """,
+                values,
+            )
+            self._conn.commit()
+        except sqlite3.IntegrityError as e:
+            self._conn.rollback()
+            raise NotFound(f"customer or tower for segment {segment.segment_id}") from e
+        self._conn.commit()
+        row = self._conn.execute(
+            "SELECT * FROM recording_segments WHERE device_id = ? AND camera = ? AND filename = ?",
+            (segment.device_id, segment.camera, segment.filename),
+        ).fetchone()
+        assert row is not None
+        return self._row_to_segment(row)
+
+    def get_recording_segment(self, segment_id: str) -> RecordingSegment:
+        row = self._conn.execute(
+            "SELECT * FROM recording_segments WHERE segment_id = ?", (segment_id,)
+        ).fetchone()
+        if not row:
+            raise NotFound(f"recording segment {segment_id}")
+        return self._row_to_segment(row)
+
+    def delete_recording_segment(self, segment_id: str) -> RecordingSegment:
+        row = self._conn.execute(
+            "SELECT * FROM recording_segments WHERE segment_id = ?", (segment_id,)
+        ).fetchone()
+        if not row:
+            raise NotFound(f"recording segment {segment_id}")
+        seg = self._row_to_segment(row)
+        self._conn.execute("DELETE FROM recording_segments WHERE segment_id = ?", (segment_id,))
+        self._conn.commit()
+        return seg
+
+    def list_recording_segments(
+        self,
+        *,
+        customer_id: str,
+        device_id: Optional[str] = None,
+        camera: Optional[int] = None,
+        started_after: Optional[datetime] = None,
+        started_before: Optional[datetime] = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[RecordingSegment]:
+        clauses = ["customer_id = ?"]
+        params: list[Any] = [customer_id]
+        if device_id:
+            clauses.append("device_id = ?")
+            params.append(device_id)
+        if camera is not None:
+            clauses.append("camera = ?")
+            params.append(camera)
+        if started_after is not None:
+            clauses.append("started_at >= ?")
+            params.append(started_after.isoformat())
+        if started_before is not None:
+            clauses.append("started_at <= ?")
+            params.append(started_before.isoformat())
+        limit = max(1, min(limit, 500))
+        offset = max(0, offset)
+        params.extend([limit, offset])
+        sql = (
+            f"SELECT * FROM recording_segments WHERE {' AND '.join(clauses)} "
+            "ORDER BY started_at DESC LIMIT ? OFFSET ?"
+        )
+        rows = self._conn.execute(sql, tuple(params)).fetchall()
+        return [self._row_to_segment(r) for r in rows]
+
+    def list_expired_recording_segments(
+        self, *, retention_days: int, limit: int = 200
+    ) -> list[RecordingSegment]:
+        limit = max(1, min(limit, 1000))
+        rows = self._conn.execute(
+            """
+            SELECT * FROM recording_segments
+            WHERE started_at < datetime('now', ?)
+            ORDER BY started_at ASC
+            LIMIT ?
+            """,
+            (f"-{retention_days} days", limit),
+        ).fetchall()
+        return [self._row_to_segment(r) for r in rows]
+
+    def get_platform_config(self, key: str) -> Optional[str]:
+        row = self._conn.execute(
+            "SELECT value FROM platform_config WHERE key = ?", (key,)
+        ).fetchone()
+        return row["value"] if row else None
+
+    def set_platform_config(self, key: str, value: str) -> None:
+        self._conn.execute(
+            """
+            INSERT INTO platform_config (key, value, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at
+            """,
+            (key, value, _now()),
+        )
+        self._conn.commit()
+
     # ── row mappers ──────────────────────────────────────────────────────────
     @staticmethod
     def _row_to_customer(row: sqlite3.Row) -> Customer:
@@ -265,3 +431,10 @@ class SQLiteRegistry(RegistryProvider):
         for k in ("manufactured_at", "enrolled_at", "shipped_at"):
             d[k] = _parse_dt(d.get(k))
         return Tower(**d)
+
+    @staticmethod
+    def _row_to_segment(row: sqlite3.Row) -> RecordingSegment:
+        d = dict(row)
+        for k in ("started_at", "ended_at", "uploaded_at"):
+            d[k] = _parse_dt(d.get(k))
+        return RecordingSegment(**d)

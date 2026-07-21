@@ -1,0 +1,22 @@
+[Unit]
+Description=Kallon tower recording S3 uploader
+After=network-online.target mediamtx.service kallon-recordings-mount.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__RUNTIME_USER__
+Group=__RUNTIME_USER__
+EnvironmentFile=-/etc/kallon/device.env
+ExecStart=/usr/local/sbin/kallon-recording-uploader
+Restart=always
+RestartSec=15
+Nice=10
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/kallon/recordings
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

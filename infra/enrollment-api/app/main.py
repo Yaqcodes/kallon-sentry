@@ -104,6 +104,7 @@ from registry.identity import validate  # noqa: E402
 from . import peering  # noqa: E402
 from .peering import get_peer_adder  # noqa: E402
 from .alerts import router as alerts_router  # noqa: E402
+from .recordings import router as recordings_router  # noqa: E402
 from .platform import router as platform_router  # noqa: E402
 
 
@@ -215,6 +216,7 @@ else:
 # keep their original shapes — factory images depend on them.
 app.include_router(platform_router)
 app.include_router(alerts_router)
+app.include_router(recordings_router)
 
 
 @app.on_event("startup")

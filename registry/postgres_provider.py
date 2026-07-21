@@ -8,7 +8,9 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-from typing import Optional
+from datetime import datetime
+
+from typing import Any, Optional
 
 try:  # psycopg is only needed in production, not for SQLite unit tests.
     import psycopg
@@ -16,16 +18,19 @@ try:  # psycopg is only needed in production, not for SQLite unit tests.
 except ImportError:  # pragma: no cover
     psycopg = None  # type: ignore
 
+from datetime import datetime
+
 from .interface import (
     Conflict,
     Customer,
     NotFound,
+    RecordingSegment,
     RegistryProvider,
     SubnetExhausted,
     Tower,
 )
 
-_MIGRATION = Path(__file__).parent / "migrations" / "001_initial.sql"
+_MIGRATIONS_DIR = Path(__file__).parent / "migrations"
 
 _CUSTOMER_COLS = [
     "customer_id", "display_name", "vpn_subnet", "gateway_id", "gateway_endpoint",
@@ -49,9 +54,10 @@ class PostgresRegistry(RegistryProvider):
         self._conn = psycopg.connect(self._dsn, row_factory=dict_row, autocommit=False)
 
     def init_schema(self) -> None:
-        sql = _MIGRATION.read_text(encoding="utf-8")
-        with self._conn.cursor() as cur:
-            cur.execute(sql)
+        for path in sorted(_MIGRATIONS_DIR.glob("*.sql")):
+            sql = path.read_text(encoding="utf-8")
+            with self._conn.cursor() as cur:
+                cur.execute(sql)
         self._conn.commit()
 
     def close(self) -> None:
@@ -228,5 +234,136 @@ class PostgresRegistry(RegistryProvider):
                 "INSERT INTO audit_events (event_type, entity_id, actor, payload_json) "
                 "VALUES (%s, %s, %s, %s)",
                 (event_type, entity_id, actor, payload_json),
+            )
+        self._conn.commit()
+
+    # ── recordings ───────────────────────────────────────────────────────────
+    def _row_to_segment(self, row: dict) -> RecordingSegment:
+        return RecordingSegment(**row)
+
+    def upsert_recording_segment(self, segment: RecordingSegment) -> RecordingSegment:
+        cols = [
+            "segment_id", "customer_id", "device_id", "camera", "filename",
+            "s3_bucket", "s3_key", "size_bytes", "sha256_hex", "started_at",
+            "ended_at", "uploaded_at", "duration_sec",
+        ]
+        values = tuple(getattr(segment, c) for c in cols)
+        try:
+            with self._conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    INSERT INTO recording_segments ({', '.join(cols)})
+                    VALUES ({', '.join(['%s'] * len(cols))})
+                    ON CONFLICT (device_id, camera, filename) DO UPDATE SET
+                        s3_bucket = EXCLUDED.s3_bucket,
+                        s3_key = EXCLUDED.s3_key,
+                        size_bytes = EXCLUDED.size_bytes,
+                        sha256_hex = EXCLUDED.sha256_hex,
+                        started_at = EXCLUDED.started_at,
+                        ended_at = EXCLUDED.ended_at,
+                        uploaded_at = EXCLUDED.uploaded_at,
+                        duration_sec = EXCLUDED.duration_sec
+                    RETURNING *
+                    """,
+                    values,
+                )
+                row = cur.fetchone()
+            self._conn.commit()
+        except psycopg.errors.ForeignKeyViolation as e:  # type: ignore[attr-defined]
+            self._conn.rollback()
+            raise NotFound(f"customer or tower for segment {segment.segment_id}") from e
+        assert row is not None
+        return self._row_to_segment(row)
+
+    def get_recording_segment(self, segment_id: str) -> RecordingSegment:
+        with self._conn.cursor() as cur:
+            cur.execute("SELECT * FROM recording_segments WHERE segment_id = %s", (segment_id,))
+            row = cur.fetchone()
+        if not row:
+            raise NotFound(f"recording segment {segment_id}")
+        return self._row_to_segment(row)
+
+    def delete_recording_segment(self, segment_id: str) -> RecordingSegment:
+        with self._conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM recording_segments WHERE segment_id = %s RETURNING *",
+                (segment_id,),
+            )
+            row = cur.fetchone()
+        if not row:
+            self._conn.rollback()
+            raise NotFound(f"recording segment {segment_id}")
+        self._conn.commit()
+        return self._row_to_segment(row)
+
+    def list_recording_segments(
+        self,
+        *,
+        customer_id: str,
+        device_id: Optional[str] = None,
+        camera: Optional[int] = None,
+        started_after: Optional[datetime] = None,
+        started_before: Optional[datetime] = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[RecordingSegment]:
+        clauses = ["customer_id = %s"]
+        params: list[Any] = [customer_id]
+        if device_id:
+            clauses.append("device_id = %s")
+            params.append(device_id)
+        if camera is not None:
+            clauses.append("camera = %s")
+            params.append(camera)
+        if started_after is not None:
+            clauses.append("started_at >= %s")
+            params.append(started_after)
+        if started_before is not None:
+            clauses.append("started_at <= %s")
+            params.append(started_before)
+        limit = max(1, min(limit, 500))
+        offset = max(0, offset)
+        params.extend([limit, offset])
+        sql = (
+            f"SELECT * FROM recording_segments WHERE {' AND '.join(clauses)} "
+            "ORDER BY started_at DESC LIMIT %s OFFSET %s"
+        )
+        with self._conn.cursor() as cur:
+            cur.execute(sql, tuple(params))
+            rows = cur.fetchall()
+        return [self._row_to_segment(r) for r in rows]
+
+    def list_expired_recording_segments(
+        self, *, retention_days: int, limit: int = 200
+    ) -> list[RecordingSegment]:
+        limit = max(1, min(limit, 1000))
+        with self._conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT * FROM recording_segments
+                WHERE started_at < now() - make_interval(days => %s)
+                ORDER BY started_at ASC
+                LIMIT %s
+                """,
+                (retention_days, limit),
+            )
+            rows = cur.fetchall()
+        return [self._row_to_segment(r) for r in rows]
+
+    def get_platform_config(self, key: str) -> Optional[str]:
+        with self._conn.cursor() as cur:
+            cur.execute("SELECT value FROM platform_config WHERE key = %s", (key,))
+            row = cur.fetchone()
+        return row["value"] if row else None
+
+    def set_platform_config(self, key: str, value: str) -> None:
+        with self._conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO platform_config (key, value, updated_at)
+                VALUES (%s, %s, now())
+                ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()
+                """,
+                (key, value),
             )
         self._conn.commit()

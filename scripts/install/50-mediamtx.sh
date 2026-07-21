@@ -51,8 +51,8 @@ resolve_record_env() {
     RECORD_MEDIAMTX_DELETE_AFTER=$RECORD_RETENTION
     warn "RECORD_RETENTION is deprecated; use RECORD_MEDIAMTX_DELETE_AFTER"
   fi
-  default_var RECORD_MEDIAMTX_SEGMENT_FILE_DURATION 1h
-  default_var RECORD_MEDIAMTX_DELETE_AFTER 24h
+  default_var RECORD_MEDIAMTX_SEGMENT_FILE_DURATION 15m
+  default_var RECORD_MEDIAMTX_DELETE_AFTER 168h
   # Bare numbers (e.g. "24") are ambiguous — mediamtx expects a Go duration like 24h.
   if [[ "${RECORD_MEDIAMTX_DELETE_AFTER}" =~ ^[0-9]+$ ]]; then
     RECORD_MEDIAMTX_DELETE_AFTER="${RECORD_MEDIAMTX_DELETE_AFTER}h"

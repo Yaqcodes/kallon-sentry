@@ -425,6 +425,20 @@ def _disk_hints() -> dict[str, Any]:
     return hints
 
 
+def _upload_status() -> dict[str, Any]:
+    path = Path(RECORD_PATH) / ".upload-state.json"
+    if not path.is_file():
+        return {"available": False}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(data, dict):
+            data["available"] = True
+            return data
+    except (OSError, json.JSONDecodeError):
+        pass
+    return {"available": False, "error": "invalid state file"}
+
+
 def recording_status() -> dict[str, Any]:
     """Desired (device.env) + effective (MediaMTX path config) recording state."""
     cameras = camera_list()
@@ -477,12 +491,13 @@ def recording_status() -> dict[str, Any]:
         "record_path": RECORD_PATH,
         "delete_after": os.environ.get("RECORD_MEDIAMTX_DELETE_AFTER")
         or os.environ.get("RECORD_RETENTION")
-        or "24h",
+        or "168h",
         "segment_duration": os.environ.get("RECORD_MEDIAMTX_SEGMENT_FILE_DURATION")
         or os.environ.get("RECORD_SEGMENT_DURATION")
-        or "1h",
+        or "15m",
         "paths": paths,
         "disk": disk,
+        "upload": _upload_status(),
         "warnings": warnings,
     }
 

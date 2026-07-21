@@ -87,6 +87,9 @@ export interface AlertEvent {
   id: string;
   type: string;
   level: AlertLevel;
-  time: string; // 'HH:MM:SS'
+  /** ISO-8601 UTC (canonical). */
+  timestampUtc: string | null;
+  /** Human-readable UTC+1 for display. */
+  time: string;
   payload: Record<string, unknown>;
 }
