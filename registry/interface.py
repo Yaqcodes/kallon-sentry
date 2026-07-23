@@ -186,6 +186,9 @@ class RegistryProvider(ABC):
     def delete_recording_segment(self, segment_id: str) -> RecordingSegment: ...
 
     @abstractmethod
+    def delete_recording_segments_for_device(self, device_id: str) -> int: ...
+
+    @abstractmethod
     def list_recording_segments(
         self,
         *,

@@ -167,6 +167,42 @@ async def ingest_recording(request: Request):
     return JSONResponse(status_code=201, content={"segment": _segment_public(saved)})
 
 
+@router.post("/recordings/purge-device")
+async def purge_device_recordings(request: Request):
+    """Ops: remove all registry rows for a device (S3 objects deleted separately).
+
+    Auth: X-Kallon-Ingest-Token (same as upload ingest). Body: {"device_id": "..."}.
+    """
+    if (resp := _ingest_auth(request)) is not None:
+        return resp
+    try:
+        body = json.loads(await request.body() or b"{}")
+    except json.JSONDecodeError:
+        return _err(422, "invalid_request", "body must be JSON")
+    device_id = str(body.get("device_id") or "").strip()
+    if not device_id:
+        return _err(422, "invalid_request", "device_id is required")
+
+    reg = get_registry()
+    try:
+        tower = reg.get_tower(device_id)
+        deleted = reg.delete_recording_segments_for_device(device_id)
+        reg.audit(
+            "recording.purge_device",
+            entity_id=device_id,
+            actor="ingest",
+            payload_json={"deleted": deleted, "customer_id": tower.customer_id},
+        )
+    except NotFound:
+        reg.close()
+        return _err(404, "not_found", f"unknown device_id {device_id!r}")
+    except RegistryError as e:
+        reg.close()
+        return _err(503, "registry_unavailable", str(e))
+    reg.close()
+    return {"device_id": device_id, "deleted_segments": deleted}
+
+
 @router.get("/customers/{customer_id}/recordings")
 def list_customer_recordings(
     customer_id: str,

@@ -351,6 +351,13 @@ class SQLiteRegistry(RegistryProvider):
         self._conn.commit()
         return seg
 
+    def delete_recording_segments_for_device(self, device_id: str) -> int:
+        cur = self._conn.execute(
+            "DELETE FROM recording_segments WHERE device_id = ?", (device_id,)
+        )
+        self._conn.commit()
+        return int(cur.rowcount or 0)
+
     def list_recording_segments(
         self,
         *,

@@ -315,6 +315,16 @@ class PostgresRegistry(RegistryProvider):
         self._conn.commit()
         return self._row_to_segment(row)
 
+    def delete_recording_segments_for_device(self, device_id: str) -> int:
+        with self._conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM recording_segments WHERE device_id = %s",
+                (device_id,),
+            )
+            n = cur.rowcount or 0
+        self._conn.commit()
+        return int(n)
+
     def list_recording_segments(
         self,
         *,
