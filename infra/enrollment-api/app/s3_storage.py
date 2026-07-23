@@ -7,7 +7,7 @@ from typing import Any, Optional
 
 log = logging.getLogger("s3_storage")
 
-_client = None
+_s3_client = None  # boto3 client instance (never name this the same as the getter)
 
 
 def _bucket() -> str:
@@ -48,18 +48,19 @@ def _client_kwargs() -> dict[str, Any]:
     return kwargs
 
 
-def _client():
-    global _client
-    if _client is not None:
-        return _client
+def get_s3_client():
+    """Lazy boto3 S3 client. Do not shadow this function with its return value."""
+    global _s3_client
+    if _s3_client is not None:
+        return _s3_client
     if not configured():
         raise RuntimeError(
             "S3/B2 not configured — set KALLON_S3_BUCKET, KALLON_S3_ENDPOINT, and AWS credentials"
         )
     import boto3
 
-    _client = boto3.client(**_client_kwargs())
-    return _client
+    _s3_client = boto3.client(**_client_kwargs())
+    return _s3_client
 
 
 def presign_get_object(
@@ -73,7 +74,7 @@ def presign_get_object(
     if download and filename:
         params["ResponseContentDisposition"] = f'attachment; filename="{filename}"'
     ttl = _presign_ttl()
-    url = _client().generate_presigned_url(
+    url = get_s3_client().generate_presigned_url(
         "get_object",
         Params=params,
         ExpiresIn=ttl,
@@ -82,8 +83,8 @@ def presign_get_object(
 
 
 def delete_object(*, bucket: str, key: str) -> None:
-    _client().delete_object(Bucket=bucket, Key=key)
+    get_s3_client().delete_object(Bucket=bucket, Key=key)
 
 
 def head_object(*, bucket: str, key: str) -> dict:
-    return _client().head_object(Bucket=bucket, Key=key)
+    return get_s3_client().head_object(Bucket=bucket, Key=key)

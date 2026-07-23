@@ -34,7 +34,7 @@ upsert_env() {
   python3 - "$tmp" "$key" "$val" <<'PY'
 import sys
 path, key, val = sys.argv[1:4]
-lines = open(path, encoding="utf-8").read().splitlines()
+lines = open(path, encoding="utf-8", errors="replace").read().splitlines()
 out, seen = [], False
 for line in lines:
     if line.startswith(key + "="):
@@ -62,15 +62,19 @@ for kv in \
   "AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID" \
   "AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY" \
   "RECORD_UPLOAD_INGEST_TOKEN=$RECORD_UPLOAD_INGEST_TOKEN" \
-  "RECORD_UPLOAD_PLATFORM_URL=$RECORD_UPLOAD_PLATFORM_URL" \
-  "RECORD_MEDIAMTX_SEGMENT_FILE_DURATION=15m"
+  "RECORD_UPLOAD_PLATFORM_URL=$RECORD_UPLOAD_PLATFORM_URL"
 do
   upsert_env "${kv%%=*}" "${kv#*=}"
 done
+# Do not overwrite RECORD_MEDIAMTX_* — device.env is the SSOT for segment/retention.
 
 cd "$REPO_DIR"
-sudo -E env REPO_DIR="$REPO_DIR" scripts/kallon-jetson-install.sh --only-module 55
+sudo -E env REPO_DIR="$REPO_DIR" bash scripts/kallon-jetson-install.sh --only-module 55
 sudo pip3 install 'boto3>=1.34' 2>/dev/null || pip3 install --user 'boto3>=1.34'
+# Re-apply mediamtx record flags from device.env (upload ON → recordDeleteAfter=0).
+if grep -qE '^[[:space:]]*RECORD_ENABLE=1' "$ENV_FILE"; then
+  sudo /usr/local/sbin/kallon-apply-recording on || true
+fi
 sudo systemctl enable kallon-recording-uploader.service
 sudo systemctl restart kallon-recording-uploader.service
 echo "Uploader status:" && systemctl is-active kallon-recording-uploader.service

@@ -2,6 +2,9 @@
 # 55-recording-uploader.sh — install tower S3 upload worker (upload-before-delete).
 source "$(dirname "$0")/lib.sh"
 
+require_root
+load_env
+
 REPO_DIR="${REPO_DIR:-$(cd "$INSTALL_DIR/../.." && pwd)}"
 UPLOADER=/usr/local/sbin/kallon-recording-uploader
 SERVICE=/etc/systemd/system/kallon-recording-uploader.service

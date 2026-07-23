@@ -31,7 +31,11 @@ const isFormField = (el: EventTarget | null) => {
   return !!t && (t.tagName === 'INPUT' || t.tagName === 'SELECT' || t.tagName === 'TEXTAREA' || t.isContentEditable);
 };
 
-export default function SentinelConsole() {
+interface Props {
+  onOpenRecordings?: () => void;
+}
+
+export default function SentinelConsole({ onOpenRecordings }: Props) {
   const { config, streams, status, alerts, connected } = useTower();
 
   const [selectedCamId, setSelectedCamId] = useState<string>('');
@@ -194,27 +198,28 @@ export default function SentinelConsole() {
 
   const panStart = useCallback((dir: PanDir) => {
     stopJog();
+    setPtzMsg(`ptz ${dir}…`);
     jogDir.current = dir;
+    void sendMove(dir, 0, PTZ_PULSE_SEC).then((r) => feedback(r, 'move'));
     jogTimer.current = window.setTimeout(() => {
       jogTimer.current = undefined;
       jogging.current = true;
-      void sendMove(dir, 0, PTZ_PULSE_SEC);
+      setPtzMsg('jog…');
       jogInterval.current = window.setInterval(() => {
         void sendMove(dir, 0, PTZ_PULSE_SEC);
       }, PTZ_JOG_MS);
     }, PTZ_HOLD_MS);
-  }, [stopJog, sendMove]);
+  }, [stopJog, sendMove, feedback]);
 
   const panEnd = useCallback(() => {
     if (jogTimer.current !== undefined) {
       window.clearTimeout(jogTimer.current);
       jogTimer.current = undefined;
-      if (jogDir.current) nudge(jogDir.current);
       jogDir.current = null;
       return;
     }
     stopJog();
-  }, [nudge, stopJog]);
+  }, [stopJog]);
 
   const pan = useCallback((dir: PanDir) => {
     nudge(dir);
@@ -288,6 +293,12 @@ export default function SentinelConsole() {
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           <span style={{ fontFamily: font.display, fontWeight: 700, fontSize: 24, letterSpacing: '.24em', color: colors.textBright }}>SENTINEL</span>
           <span style={{ fontFamily: font.display, fontWeight: 500, fontSize: 14, letterSpacing: '.32em', color: colors.textFaint }}>TOWER CONTROL</span>
+          <nav className="tower-nav" aria-label="Main sections">
+            <button type="button" className="active">LIVE</button>
+            {onOpenRecordings && (
+              <button type="button" onClick={onOpenRecordings}>RECORDINGS</button>
+            )}
+          </nav>
           <span className="device-pill" title="Device ID">
             <span className="pill-hd" style={{ background: levelColor(sysHealth.level), color: levelColor(sysHealth.level) }} />
             {deviceName}

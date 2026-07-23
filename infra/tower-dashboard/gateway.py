@@ -41,6 +41,8 @@ Endpoints
   GET  /api/recording         -> continuous recording status (desired + effective)
   PUT  /api/recording         -> {"enabled": true|false} toggle (MediaMTX + persist)
   POST /api/recording         -> same as PUT (alias)
+  GET  /api/recordings        -> list local MP4 segments under RECORD_PATH
+  GET  /api/recordings/file/<camN>/<file> -> stream a local segment (Range)
 
 Environment
 -----------
@@ -97,13 +99,20 @@ RTSP_LOCAL_BASE = (
 SNAPSHOT_TIMEOUT_SEC = float(os.environ.get("SNAPSHOT_TIMEOUT_SEC", "15"))
 SNAPSHOT_PATH = Path(os.environ.get("SNAPSHOT_PATH", str(Path.home() / "Pictures" / "Sentinel")))
 ALERT_HISTORY = int(os.environ.get("ALERT_HISTORY", "200"))
-RECORD_PATH = os.environ.get("RECORD_PATH", "/var/kallon/recordings")
 RECORD_APPLY_CMD = os.environ.get(
     "RECORD_APPLY_CMD", "sudo -n /usr/local/sbin/kallon-apply-recording"
 )
 DEVICE_ENV_PATH = Path(os.environ.get("KALLON_ENV", "/etc/kallon/device.env"))
 
+try:
+    from record_settings import resolve_record_settings  # type: ignore
+except ImportError:  # pragma: no cover — installed next to gateway.py
+    import sys as _sys
+    _sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from record_settings import resolve_record_settings  # type: ignore
+
 _SNAPSHOT_RE = re.compile(r"^/api/snapshot/cam(\d+)$")
+_RECORDING_FILE_RE = re.compile(r"^/api/recordings/file/(cam\d+)/([^/]+\.mp4)$", re.I)
 
 PTZ_METHODS = {
     "ping",
@@ -349,29 +358,28 @@ def snapshot_save(camera: int) -> dict[str, Any]:
     return {"ok": True, "path": str(dest), "filename": filename}
 
 
+def _record_settings() -> dict[str, Any]:
+    """Fresh read of device.env — never trust stale process env for retention."""
+    return resolve_record_settings(device_env_path=DEVICE_ENV_PATH)
+
+
+def _record_path() -> str:
+    return str(_record_settings()["record_path"])
+
+
 def _env_record_enable() -> Optional[bool]:
     """Read RECORD_ENABLE from device.env (authoritative for reboot)."""
+    settings = _record_settings()
+    # Distinguish missing key (None) from explicit 0/1 via file parse
+    file_env = None
     try:
-        raw = DEVICE_ENV_PATH.read_bytes()
-        for enc in ("utf-8-sig", "utf-8", "cp1252", "latin-1"):
-            try:
-                text = raw.decode(enc)
-                break
-            except UnicodeDecodeError:
-                continue
-        else:
-            text = raw.decode("utf-8", errors="replace")
-    except OSError:
+        from record_settings import load_device_env  # type: ignore
+        file_env = load_device_env(DEVICE_ENV_PATH)
+    except Exception:  # noqa: BLE001
+        file_env = {}
+    if "RECORD_ENABLE" not in file_env:
         return None
-    for line_raw in text.splitlines():
-        line = line_raw.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, val = line.split("=", 1)
-        if key.strip() != "RECORD_ENABLE":
-            continue
-        return val.strip().strip("\"'") in ("1", "true", "yes", "on")
-    return None
+    return bool(settings["record_enable"])
 
 
 def _record_patch_body(enable: bool) -> dict[str, Any]:
@@ -379,35 +387,26 @@ def _record_patch_body(enable: bool) -> dict[str, Any]:
     if not enable:
         # Keep sourceOnDemand as-is so live HLS/MJPEG stays up when stopping NVR.
         return {"record": False}
-    delete_after = (
-        os.environ.get("RECORD_MEDIAMTX_DELETE_AFTER")
-        or os.environ.get("RECORD_RETENTION")
-        or "24h"
-    )
-    if re.fullmatch(r"[0-9]+", delete_after):
-        delete_after = f"{delete_after}h"
-    segment = (
-        os.environ.get("RECORD_MEDIAMTX_SEGMENT_FILE_DURATION")
-        or os.environ.get("RECORD_SEGMENT_DURATION")
-        or "1h"
-    )
+    settings = _record_settings()
     return {
         "record": True,
         "sourceOnDemand": False,
-        "recordPath": f"{RECORD_PATH.rstrip('/')}" + "/%path/%Y-%m-%d_%H-%M-%S-%f",
+        "recordPath": f"{settings['record_path']}/%path/%Y-%m-%d_%H-%M-%S-%f",
         "recordFormat": "fmp4",
         "recordPartDuration": "1s",
-        "recordSegmentDuration": segment,
-        "recordDeleteAfter": delete_after,
+        "recordSegmentDuration": settings["segment_duration"],
+        # When upload is enabled this is "0" (never age-delete) — uploader owns deletes.
+        "recordDeleteAfter": settings["delete_after_effective"],
     }
 
 
 def _disk_hints() -> dict[str, Any]:
-    hints: dict[str, Any] = {"mount": RECORD_PATH}
+    record_path = _record_path()
+    hints: dict[str, Any] = {"mount": record_path}
     try:
         import shutil
 
-        usage = shutil.disk_usage(RECORD_PATH)
+        usage = shutil.disk_usage(record_path)
         hints["space_total_gb"] = round(usage.total / (1024**3), 2)
         hints["space_free_gb"] = round(usage.free / (1024**3), 2)
         hints["space_used_gb"] = round(usage.used / (1024**3), 2)
@@ -415,7 +414,7 @@ def _disk_hints() -> dict[str, Any]:
         hints["error"] = str(exc)
     try:
         src = subprocess.check_output(
-            ["findmnt", "-n", "-o", "SOURCE", "--target", RECORD_PATH],
+            ["findmnt", "-n", "-o", "SOURCE", "--target", record_path],
             text=True,
             stderr=subprocess.DEVNULL,
             timeout=3,
@@ -429,7 +428,7 @@ def _disk_hints() -> dict[str, Any]:
 
 
 def _upload_status() -> dict[str, Any]:
-    path = Path(RECORD_PATH) / ".upload-state.json"
+    path = Path(_record_path()) / ".upload-state.json"
     if not path.is_file():
         return {"available": False}
     try:
@@ -442,8 +441,82 @@ def _upload_status() -> dict[str, Any]:
     return {"available": False, "error": "invalid state file"}
 
 
+def list_local_recordings(camera: Optional[int] = None, limit: int = 200) -> dict[str, Any]:
+    """List closed local MP4 segments from RECORD_PATH (Jetson console source of truth)."""
+    root = Path(_record_path())
+    settings = _record_settings()
+    segments: list[dict[str, Any]] = []
+    if not root.is_dir():
+        return {
+            "record_path": str(root),
+            "segments": [],
+            "error": f"record path missing: {root}",
+            "upload_enable": settings["upload_enable"],
+            "delete_after_configured": settings["delete_after_configured"],
+            "delete_after_effective": settings["delete_after_effective"],
+            "segment_duration": settings["segment_duration"],
+        }
+
+    cam_dirs = sorted(p for p in root.glob("cam*") if p.is_dir())
+    if camera is not None:
+        cam_dirs = [p for p in cam_dirs if p.name == f"cam{camera}"]
+
+    for cam_dir in cam_dirs:
+        if not cam_dir.name.startswith("cam") or not cam_dir.name[3:].isdigit():
+            continue
+        cam_n = int(cam_dir.name[3:])
+        files = sorted(cam_dir.glob("*.mp4"), key=lambda p: p.stat().st_mtime, reverse=True)
+        for path in files:
+            try:
+                st = path.stat()
+            except OSError:
+                continue
+            rel = f"{cam_dir.name}/{path.name}"
+            segments.append({
+                "camera": cam_n,
+                "filename": path.name,
+                "rel_path": rel,
+                "size_bytes": st.st_size,
+                "mtime_utc": datetime.fromtimestamp(st.st_mtime, tz=timezone.utc).isoformat(),
+                "playback_url": f"/api/recordings/file/{rel}",
+            })
+
+    segments.sort(key=lambda s: s["mtime_utc"], reverse=True)
+    if limit > 0:
+        segments = segments[:limit]
+    return {
+        "record_path": str(root),
+        "segments": segments,
+        "upload_enable": settings["upload_enable"],
+        "delete_after_configured": settings["delete_after_configured"],
+        "delete_after_effective": settings["delete_after_effective"],
+        "segment_duration": settings["segment_duration"],
+    }
+
+
+def resolve_local_recording_file(cam_dir: str, filename: str) -> Optional[Path]:
+    """Resolve a safe path under RECORD_PATH/camN/file.mp4 (no traversal)."""
+    if not re.fullmatch(r"cam\d+", cam_dir, flags=re.I):
+        return None
+    if "/" in filename or "\\" in filename or filename in (".", ".."):
+        return None
+    if not filename.lower().endswith(".mp4"):
+        return None
+    root = Path(_record_path()).resolve()
+    candidate = (root / cam_dir / filename).resolve()
+    try:
+        candidate.relative_to(root)
+    except ValueError:
+        return None
+    if not candidate.is_file():
+        return None
+    return candidate
+
+
 def recording_status() -> dict[str, Any]:
     """Desired (device.env) + effective (MediaMTX path config) recording state."""
+    settings = _record_settings()
+    record_path = settings["record_path"]
     cameras = camera_list()
     paths: list[dict[str, Any]] = []
     mtx_error: Optional[str] = None
@@ -481,7 +554,7 @@ def recording_status() -> dict[str, Any]:
     disk = _disk_hints()
     if enabled and disk.get("on_nvme") is False:
         warnings.append(
-            f"{RECORD_PATH} is not on NVMe (source={disk.get('source')}) — "
+            f"{record_path} is not on NVMe (source={disk.get('source')}) — "
             "risk of filling the OS disk"
         )
     if desired is not None and effective is not None and desired != effective:
@@ -491,13 +564,11 @@ def recording_status() -> dict[str, Any]:
         "enabled": bool(enabled),
         "desired": desired,
         "effective": effective,
-        "record_path": RECORD_PATH,
-        "delete_after": os.environ.get("RECORD_MEDIAMTX_DELETE_AFTER")
-        or os.environ.get("RECORD_RETENTION")
-        or "168h",
-        "segment_duration": os.environ.get("RECORD_MEDIAMTX_SEGMENT_FILE_DURATION")
-        or os.environ.get("RECORD_SEGMENT_DURATION")
-        or "15m",
+        "record_path": record_path,
+        "delete_after": settings["delete_after_configured"],
+        "delete_after_effective": settings["delete_after_effective"],
+        "segment_duration": settings["segment_duration"],
+        "upload_enable": settings["upload_enable"],
         "paths": paths,
         "disk": disk,
         "upload": _upload_status(),
@@ -667,6 +738,10 @@ class Handler(BaseHTTPRequestHandler):
             self._ptz_status()
         elif path == "/api/recording":
             self._json(200, recording_status())
+        elif path == "/api/recordings":
+            self._list_recordings()
+        elif m := _RECORDING_FILE_RE.match(path):
+            self._recording_file(m.group(1), m.group(2))
         elif m := _SNAPSHOT_RE.match(path):
             self._snapshot_inline(int(m.group(1)))
         else:
@@ -816,6 +891,81 @@ class Handler(BaseHTTPRequestHandler):
             self._json(400, {"ok": False, "error": {"code": "BAD_CAMERA", "message": "camera must be a positive integer"}})
             return
         self._json(200, snapshot_save(camera))
+
+    def _list_recordings(self) -> None:
+        query = self.path.split("?", 1)[1] if "?" in self.path else ""
+        camera: Optional[int] = None
+        limit = 200
+        for part in query.split("&"):
+            if not part:
+                continue
+            if part.startswith("camera="):
+                try:
+                    camera = int(part.split("=", 1)[1])
+                except ValueError:
+                    self._json(422, {"error": {"code": "invalid_request", "message": "camera must be an integer"}})
+                    return
+            elif part.startswith("limit="):
+                try:
+                    limit = max(1, min(1000, int(part.split("=", 1)[1])))
+                except ValueError:
+                    self._json(422, {"error": {"code": "invalid_request", "message": "limit must be an integer"}})
+                    return
+        self._json(200, list_local_recordings(camera=camera, limit=limit))
+
+    def _recording_file(self, cam_dir: str, filename: str) -> None:
+        path = resolve_local_recording_file(cam_dir, filename)
+        if path is None:
+            self._json(404, {"error": {"code": "not_found", "message": "recording not found"}})
+            return
+        try:
+            size = path.stat().st_size
+        except OSError as exc:
+            self._json(500, {"error": {"code": "io_error", "message": str(exc)}})
+            return
+
+        range_hdr = self.headers.get("Range", "").strip()
+        start = 0
+        end = size - 1
+        status = 200
+        if range_hdr.startswith("bytes=") and size > 0:
+            spec = range_hdr[6:].split(",", 1)[0].strip()
+            if "-" in spec:
+                left, _, right = spec.partition("-")
+                try:
+                    if left == "" and right != "":
+                        # suffix: last N bytes
+                        suffix = int(right)
+                        start = max(0, size - suffix)
+                    else:
+                        start = int(left) if left else 0
+                        end = int(right) if right else (size - 1)
+                    end = min(end, size - 1)
+                    start = max(0, min(start, end))
+                    status = 206
+                except ValueError:
+                    start, end, status = 0, size - 1, 200
+
+        length = end - start + 1 if size > 0 else 0
+        self.send_response(status)
+        self.send_header("Content-Type", "video/mp4")
+        self.send_header("Accept-Ranges", "bytes")
+        self.send_header("Content-Length", str(length))
+        self.send_header("Cache-Control", "no-store")
+        if status == 206:
+            self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+        self.end_headers()
+        if self.command == "HEAD":
+            return
+        with path.open("rb") as fh:
+            fh.seek(start)
+            remaining = length
+            while remaining > 0:
+                chunk = fh.read(min(1024 * 1024, remaining))
+                if not chunk:
+                    break
+                self.wfile.write(chunk)
+                remaining -= len(chunk)
 
     def _recording_set(self) -> None:
         payload = self._read_json_object()

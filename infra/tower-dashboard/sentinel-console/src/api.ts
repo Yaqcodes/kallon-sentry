@@ -131,6 +131,33 @@ export const getStreams = () => getJSON<StreamsResponse>('/api/streams');
 export const getStatus = () => getJSON<StatusResponse>('/api/status');
 export const getRecording = () => getJSON<RecordingStatus>('/api/recording');
 
+export interface LocalRecordingSegment {
+  camera: number;
+  filename: string;
+  rel_path: string;
+  size_bytes: number;
+  mtime_utc: string;
+  playback_url: string;
+}
+
+export interface LocalRecordingsResponse {
+  record_path: string;
+  segments: LocalRecordingSegment[];
+  upload_enable?: boolean;
+  delete_after_configured?: string;
+  delete_after_effective?: string;
+  segment_duration?: string;
+  error?: string;
+}
+
+export function getLocalRecordings(params: { camera?: number; limit?: number } = {}): Promise<LocalRecordingsResponse> {
+  const q = new URLSearchParams();
+  if (params.camera != null) q.set('camera', String(params.camera));
+  if (params.limit != null) q.set('limit', String(params.limit));
+  const qs = q.toString();
+  return getJSON(`/api/recordings${qs ? `?${qs}` : ''}`);
+}
+
 /** Toggle continuous NVR recording on all cameras (global). */
 export async function setRecording(enabled: boolean): Promise<RecordingStatus> {
   try {

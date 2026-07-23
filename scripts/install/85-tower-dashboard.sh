@@ -51,6 +51,11 @@ sync_dashboard_files() {
 
   ensure_dir "$DASH_DIR" 0755 root "$RUNTIME_USER"
   install_if_changed "$GATEWAY_SRC" "$DASH_DIR/gateway.py" 0644 root "$RUNTIME_USER" || true
+  install_if_changed "$REPO_DIR/infra/tower-dashboard/record_settings.py" \
+    "$DASH_DIR/record_settings.py" 0644 root "$RUNTIME_USER" || true
+  ensure_dir /usr/local/lib/kallon 0755 root root
+  install_if_changed "$REPO_DIR/infra/tower-dashboard/record_settings.py" \
+    /usr/local/lib/kallon/record_settings.py 0644 root root || true
   install_if_changed "$MJPEG_SRC"   "$DASH_DIR/mjpeg_proxy.py" 0644 root "$RUNTIME_USER" || true
   install_if_changed "$LISTENER_SRC" "$APP_DIR/alert_listener.py" 0644 root "$RUNTIME_USER" || true
 

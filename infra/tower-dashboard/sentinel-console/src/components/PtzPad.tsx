@@ -51,12 +51,13 @@ export default function PtzPad({ accent, size = '176px', onPanStart, onPanEnd, o
       <div style={{ position: 'absolute', inset: 0, borderRadius: '50%', border: '1px solid #2b343d', background: 'radial-gradient(circle at 50% 42%,#161d23,#0f151a)', boxShadow: 'inset 0 2px 10px rgba(0,0,0,.5)' }} />
       <div style={{ position: 'absolute', inset: 14, borderRadius: '50%', border: '1px dashed #29323b', pointerEvents: 'none' }} />
 
-      <button {...bind('up')} aria-label="Tilt up">▲</button>
-      <button {...bind('down')} aria-label="Tilt down">▼</button>
-      <button {...bind('left')} aria-label="Pan left">◀</button>
-      <button {...bind('right')} aria-label="Pan right">▶</button>
+      <button type="button" {...bind('up')} aria-label="Tilt up">▲</button>
+      <button type="button" {...bind('down')} aria-label="Tilt down">▼</button>
+      <button type="button" {...bind('left')} aria-label="Pan left">◀</button>
+      <button type="button" {...bind('right')} aria-label="Pan right">▶</button>
 
       <button
+        type="button"
         className="pad-center"
         onClick={onRecenter}
         title="Recenter camera"

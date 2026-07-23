@@ -31,15 +31,24 @@ esac
 [[ -f "$DEVICE_ENV" ]] || die "missing $DEVICE_ENV"
 [[ -f "$MEDIAMTX_YML" ]] || die "missing $MEDIAMTX_YML"
 
-# Load retention / path defaults from device.env (don't export passwords blindly).
+# Load device.env then resolve retention/segment via shared helper (SSOT).
 # shellcheck disable=SC1090
 set -a; source "$DEVICE_ENV"; set +a
-RECORD_PATH="${RECORD_PATH:-/var/kallon/recordings}"
-RECORD_MEDIAMTX_SEGMENT_FILE_DURATION="${RECORD_MEDIAMTX_SEGMENT_FILE_DURATION:-${RECORD_SEGMENT_DURATION:-1h}}"
-RECORD_MEDIAMTX_DELETE_AFTER="${RECORD_MEDIAMTX_DELETE_AFTER:-${RECORD_RETENTION:-24h}}"
-if [[ "${RECORD_MEDIAMTX_DELETE_AFTER}" =~ ^[0-9]+$ ]]; then
-  RECORD_MEDIAMTX_DELETE_AFTER="${RECORD_MEDIAMTX_DELETE_AFTER}h"
-fi
+
+export DEVICE_ENV
+RESOLVED="$(python3 - <<'PY'
+import json, os, sys
+sys.path[:0] = ["/usr/local/lib/kallon", "/opt/kallon/tower-dashboard"]
+from record_settings import resolve_record_settings
+print(json.dumps(resolve_record_settings(device_env_path=os.environ.get("DEVICE_ENV", "/etc/kallon/device.env"))))
+PY
+)" || die "failed to resolve record settings (is record_settings.py installed under /usr/local/lib/kallon?)"
+
+RECORD_PATH="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["record_path"])' "$RESOLVED")"
+RECORD_MEDIAMTX_SEGMENT_FILE_DURATION="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["segment_duration"])' "$RESOLVED")"
+# Effective value written to mediamtx.yml (0 when upload enabled — uploader owns deletes).
+RECORD_MEDIAMTX_DELETE_AFTER="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["delete_after_effective"])' "$RESOLVED")"
+log "device.env → segment=${RECORD_MEDIAMTX_SEGMENT_FILE_DURATION} delete_after(effective)=${RECORD_MEDIAMTX_DELETE_AFTER}"
 
 # ── 1. Flip RECORD_ENABLE in device.env ──────────────────────────────────────
 tmp="$(mktemp)"

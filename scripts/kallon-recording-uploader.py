@@ -44,6 +44,27 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+def _parse_duration_sec(raw: str, *, default: int) -> int:
+    """Parse Go-style duration (15m, 1h, 90s) or bare integer seconds."""
+    text = (raw or "").strip().lower()
+    if not text:
+        return default
+    if text.isdigit():
+        return max(1, int(text))
+    m = re.fullmatch(r"(\d+)(ms|s|m|h)", text)
+    if not m:
+        return default
+    n = int(m.group(1))
+    unit = m.group(2)
+    if unit == "ms":
+        return max(1, n // 1000)
+    if unit == "s":
+        return max(1, n)
+    if unit == "m":
+        return max(1, n * 60)
+    return max(1, n * 3600)
+
+
 def load_device_env(path: str = "/etc/kallon/device.env") -> None:
     if not os.path.isfile(path):
         return
@@ -217,21 +238,30 @@ def discover_pending(
     return pending
 
 
-def upload_and_verify(client, bucket: str, key: str, path: Path, digest: str) -> None:
-    client.upload_file(
-        str(path),
-        bucket,
-        key,
-        ExtraArgs={
-            "ContentType": "video/mp4",
-            "Metadata": {"sha256": digest},
-            "ServerSideEncryption": "AES256",
-        },
-    )
+def upload_and_verify(client, bucket: str, key: str, path: Path, digest: Optional[str]) -> None:
+    local_size = path.stat().st_size
+    # Skip re-upload when the object is already present at the expected size
+    # (common after ingest outages left orphans in B2).
+    try:
+        head = client.head_object(Bucket=bucket, Key=key)
+        remote_size = int(head.get("ContentLength") or 0)
+        if remote_size == local_size:
+            log.info("s3 object already present %s (%s bytes) — skip put", key, local_size)
+            return
+    except Exception:
+        pass
+
+    extra: dict[str, Any] = {
+        "ContentType": "video/mp4",
+        "ServerSideEncryption": "AES256",
+    }
+    if digest:
+        extra["Metadata"] = {"sha256": digest}
+    client.upload_file(str(path), bucket, key, ExtraArgs=extra)
     head = client.head_object(Bucket=bucket, Key=key)
     remote_size = int(head.get("ContentLength") or 0)
-    if remote_size != path.stat().st_size:
-        raise RuntimeError(f"S3 size mismatch for {key}: local={path.stat().st_size} remote={remote_size}")
+    if remote_size != local_size:
+        raise RuntimeError(f"S3 size mismatch for {key}: local={local_size} remote={remote_size}")
 
 
 def post_ingest(payload: dict[str, Any]) -> None:
@@ -255,7 +285,10 @@ def post_ingest(payload: dict[str, Any]) -> None:
 
 
 def maybe_delete_local(path: Path, manifest_entry: dict[str, Any]) -> None:
-    if not _env_bool("RECORD_LOCAL_DELETE_AFTER_UPLOAD", True):
+    # Default OFF: local lifetime is owned by MediaMTX recordDeleteAfter
+    # (RECORD_MEDIAMTX_DELETE_AFTER). Early delete after upload would break
+    # "keep until retention elapses even after cloud upload."
+    if not _env_bool("RECORD_LOCAL_DELETE_AFTER_UPLOAD", False):
         return
     grace_min = _env_int("RECORD_LOCAL_GRACE_MIN", 15)
     uploaded_at = manifest_entry.get("uploaded_at")
@@ -316,12 +349,23 @@ def process_once() -> int:
 
     client = make_s3_client()
     uploaded_count = 0
-    segment_duration_sec = 15 * 60
+    # Segment length for ingest metadata — always from device.env (via process env).
+    # Accept Go-style durations (15m, 1h) or bare seconds.
+    raw_seg = (
+        os.environ.get("RECORD_MEDIAMTX_SEGMENT_FILE_DURATION")
+        or os.environ.get("RECORD_SEGMENT_DURATION")
+        or "15m"
+    ).strip()
+    segment_duration_sec = _parse_duration_sec(raw_seg, default=15 * 60)
+
+    # Full-file SHA-256 of ~15m / 400MB+ segments dominates CPU wall time.
+    # Default off; size+HeadObject verify is enough for the upload-before-delete gate.
+    compute_sha = _env_bool("RECORD_UPLOAD_SHA256", False)
 
     for path, rel, camera in pending[:concurrency]:
         write_state(uploading=1)
         try:
-            digest = sha256_file(path)
+            digest = sha256_file(path) if compute_sha else None
             filename = path.name
             key = s3_object_key(device_id, camera, filename)
             upload_and_verify(client, bucket, key, path, digest)
@@ -336,11 +380,12 @@ def process_once() -> int:
                 "s3_bucket": bucket,
                 "s3_key": key,
                 "size_bytes": path.stat().st_size,
-                "sha256_hex": digest,
                 "started_at": started.strftime("%Y-%m-%dT%H:%M:%SZ"),
                 "ended_at": ended.strftime("%Y-%m-%dT%H:%M:%SZ"),
                 "duration_sec": segment_duration_sec,
             }
+            if digest:
+                ingest["sha256_hex"] = digest
             post_ingest(ingest)
             manifest.setdefault("uploaded", {})[rel] = {
                 "s3_key": key,

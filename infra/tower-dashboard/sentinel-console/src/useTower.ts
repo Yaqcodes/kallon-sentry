@@ -3,7 +3,7 @@ import type { AlertEvent, AlertLevel } from './types';
 import {
   type ConfigResponse, type GwAlert, type StatusResponse, type StreamsResponse,
 } from './api';
-import { formatDateTimeUTC1 } from '../clock';
+import { formatDateTimeUTC1 } from './clock';
 
 const STREAMS_POLL_MS = 3000;
 const STREAMS_POLL_HIDDEN_MS = 8000;

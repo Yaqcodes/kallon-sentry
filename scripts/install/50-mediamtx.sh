@@ -51,6 +51,7 @@ resolve_record_env() {
     RECORD_MEDIAMTX_DELETE_AFTER=$RECORD_RETENTION
     warn "RECORD_RETENTION is deprecated; use RECORD_MEDIAMTX_DELETE_AFTER"
   fi
+  # Defaults match deploy/device.env.example — only used when keys are absent.
   default_var RECORD_MEDIAMTX_SEGMENT_FILE_DURATION 15m
   default_var RECORD_MEDIAMTX_DELETE_AFTER 168h
   # Bare numbers (e.g. "24") are ambiguous — mediamtx expects a Go duration like 24h.
@@ -87,8 +88,13 @@ install_recordings_mount_helper() {
 install_recording_apply_helper() {
   local src="$REPO_DIR/scripts/kallon-apply-recording.sh"
   local dst=/usr/local/sbin/kallon-apply-recording
+  local settings_src="$REPO_DIR/infra/tower-dashboard/record_settings.py"
+  local settings_dst_dir=/usr/local/lib/kallon
   local sudotmp sudodst=/etc/sudoers.d/kallon-recording
   [[ -f "$src" ]] || die "missing $src"
+  [[ -f "$settings_src" ]] || die "missing $settings_src"
+  ensure_dir "$settings_dst_dir" 0755 root root
+  install_if_changed "$settings_src" "$settings_dst_dir/record_settings.py" 0644 root root || true
   install_if_changed "$src" "$dst" 0755 root root || true
 
   if [[ -f "$REPO_DIR/deploy/kallon-recording.sudoers.example" ]]; then
