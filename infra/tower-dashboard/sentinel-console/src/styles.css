@@ -134,8 +134,14 @@ body {
   font-family: 'JetBrains Mono', monospace; font-size: 12px; letter-spacing: .08em;
   transition: all .12s;
 }
-.ctl-btn:hover { border-color: #ffffff; color: #ffffff; }
-.ctl-btn:active { transform: scale(.97); }
+.ctl-btn:hover:not(:disabled) { border-color: #ffffff; color: #ffffff; }
+.ctl-btn:active:not(:disabled) { transform: scale(.97); }
+.ctl-btn:disabled {
+  opacity: .4;
+  color: #5a656f;
+  border-color: #1a2228;
+  cursor: not-allowed;
+}
 
 /* ---- record toggle ---- */
 .rec-btn {
