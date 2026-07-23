@@ -29,13 +29,13 @@ Primary goals:
 
 What v1 intentionally ships:
 
-- Live video over VPN (`mediamtx` + RTSP)
+- Live video over VPN (`mediamtx` + RTSP) and buyer HLS via Platform API
 - Signed event alerts over VPN (HMAC webhook)
+- Cloud recording archive (S3/B2) via Platform API — see `docs/platform-api.md` §3c
 - Registry, enrollment API, hub provisioning, and factory fulfillment tooling
 
 What v1 intentionally does not ship:
 
-- Historical playback / DVR archive
 - Buyer-facing infrastructure configuration
 
 ---

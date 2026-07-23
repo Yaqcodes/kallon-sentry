@@ -8,7 +8,9 @@ consumes. v1 exposes exactly two surfaces; nothing else is guaranteed:
 1. **Live video** — RTSP over the customer WireGuard VPN.
 2. **Events** — HMAC-signed JSON webhook delivered to the customer hub.
 
-> Out of scope for v1: historical playback / DVR / archive. Live + events only.
+> Hub contract (RTSP + HMAC alerts) remains the stable **non-HTTP** surfaces for
+> WireGuard peers. Historical cloud playback / DVR lives on the Platform API —
+> see [`platform-api.md`](platform-api.md) §3c.
 
 ---
 

@@ -558,7 +558,15 @@ class RecordingSetRequest(BaseModel):
     enabled: bool
 
 
-@router.get("/towers/{device_id}/recording", tags=["Tower proxy"])
+@router.get(
+    "/towers/{device_id}/recording",
+    tags=["Tower proxy"],
+    summary="Get continuous NVR recording status",
+    description=(
+        "Proxied to tower `GET /api/recording`. Includes `desired`/`effective`, "
+        "`segment_duration`, `delete_after` / `delete_after_effective`, disk, and upload queue."
+    ),
+)
 async def tower_recording_get(device_id: str, request: Request):
     """Continuous NVR recording status (desired + MediaMTX effective)."""
     if (resp := _auth_check(request)) is not None:
@@ -566,15 +574,16 @@ async def tower_recording_get(device_id: str, request: Request):
     return await _proxy(device_id, "GET", "/api/recording")
 
 
-@router.put("/towers/{device_id}/recording", tags=["Tower proxy"])
-async def tower_recording_put(device_id: str, request: Request):
+@router.put(
+    "/towers/{device_id}/recording",
+    tags=["Tower proxy"],
+    summary="Enable/disable continuous NVR recording",
+    description="Proxied to tower `PUT /api/recording`. Body: `{\"enabled\": true|false}`.",
+)
+async def tower_recording_put(device_id: str, request: Request, payload: RecordingSetRequest):
     """Enable/disable continuous recording on all tower cameras."""
     if (resp := _auth_check(request)) is not None:
         return resp
-    try:
-        payload = RecordingSetRequest.model_validate_json(await request.body() or b"{}")
-    except ValidationError as e:
-        return _err(422, "invalid_request", f"invalid request body: {e.errors()}")
     return await _proxy(
         device_id, "PUT", "/api/recording", json_body=payload.model_dump()
     )

@@ -35,8 +35,8 @@ Wire the dashboard (RTSP + alerts)
   → postgres-windows-server-setup.md §8.1   (hub wg0 peer forwarding for NOC RTSP)
   → identity-and-secrets.md
 
-Integrate programmatically (SDK / platform API: fleet, PTZ, snapshots, telemetry)
-  → platform-api.md                    (unified API contract)
+Integrate programmatically (SDK / platform API: fleet, PTZ, live HLS, cloud recordings, alerts)
+  → platform-api.md                    (unified API contract + Swagger `/docs`)
   → https://github.com/Yaqcodes/sentinel-sdk   (Python SDK + developer docs site)
   → ../planning/sdk-implementation-plan.md     (decisions & open items)
 
@@ -60,7 +60,7 @@ ONVIF / PTZ dev CLI (optional)
 | **`field-test-setup.md`** | End-to-end validation, Path A/P, installer modules |
 | **`order-fulfillment.md`** | `kallon-fulfill-order` + business walkthrough |
 | **`alert-webhook.md`** | Dashboard integration contract (RTSP + HMAC) |
-| **`platform-api.md`** | Unified platform API contract (fleet + tower proxy; consumed by sentinel-sdk) |
+| **`platform-api.md`** | Unified platform API contract (fleet, proxy, live, cloud recordings; Swagger `/docs`) |
 | **`identity-and-secrets.md`** | ID formats, secret locations |
 | **`hardware-wiring.md`** | J12 pin map, sensor logic |
 | **`dev-onvif-ptz.md`** | ONVIF / PTZ daemon CLI (developer bench) |

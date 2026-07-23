@@ -502,7 +502,7 @@ See `docs/postgres-windows-server-setup.md` §8.1.
 | Buyer self-service signup | Not implemented — manual order → `fulfill-order` |
 | Terra dashboard UI | Separate workstream; consumes `docs/alert-webhook.md` |
 | NSSM install script for enrollment API | Documented in §7.4; no automated installer script |
-| Historical playback / DVR | Out of scope v1 |
+| Historical playback / DVR | Implemented — cloud recordings on Platform API (`docs/platform-api.md` §3c) |
 
 ---
 

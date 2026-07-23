@@ -28,6 +28,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.openapi.utils import get_openapi
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, ValidationError
 
@@ -165,18 +166,63 @@ OPENAPI_TAGS = [
         "name": "Alerts",
         "description": "Hub-forwarded tower events for customer dashboards (ingest, history, SSE).",
     },
+    {
+        "name": "Live video",
+        "description": "Buyer HLS playlists/segments via hub remux (`docs/customer-live-video.md`).",
+    },
+    {
+        "name": "Recordings",
+        "description": (
+            "Cloud recording archive (S3/B2): tower ingest, tenant-scoped list/play/"
+            "download/delete, retention, and ops purge-device. See docs/platform-api.md §3c."
+        ),
+    },
 ]
 
 app = FastAPI(
     title="Kallon Platform API",
-    version="1.2",
+    version="1.3",
     description=(
-        "Unified Terra control plane: fleet registry, tower proxy, enrollment, and "
-        "dashboard alert ingest. SDK consumers use `/v1/customers`, `/v1/towers`, and "
-        "tower proxy routes. Towers use `/v1/enroll` on first boot."
+        "Unified Terra control plane: fleet registry, tower proxy, live HLS, cloud "
+        "recordings (S3/B2), enrollment, and dashboard alert ingest.\n\n"
+        "Human contract: `docs/platform-api.md`. Interactive OpenAPI: `/docs` "
+        "(Swagger UI) or `/redoc`.\n\n"
+        "Auth: when `KALLON_PLATFORM_API_KEY` is set, send `X-Kallon-Api-Key` "
+        "(or `?api_key=` for HLS). Tower ingest uses `X-Kallon-Ingest-Token`."
     ),
     openapi_tags=OPENAPI_TAGS,
 )
+
+
+def custom_openapi():
+    if app.openapi_schema:
+        return app.openapi_schema
+    schema = get_openapi(
+        title=app.title,
+        version=app.version,
+        description=app.description,
+        routes=app.routes,
+        tags=OPENAPI_TAGS,
+    )
+    schema.setdefault("components", {}).setdefault("securitySchemes", {}).update({
+        "ApiKeyHeader": {
+            "type": "apiKey",
+            "in": "header",
+            "name": "X-Kallon-Api-Key",
+            "description": "Platform API key (when KALLON_PLATFORM_API_KEY is set).",
+        },
+        "IngestTokenHeader": {
+            "type": "apiKey",
+            "in": "header",
+            "name": "X-Kallon-Ingest-Token",
+            "description": "Tower/ops ingest token for recordings + alerts.",
+        },
+    })
+    app.openapi_schema = schema
+    return app.openapi_schema
+
+
+app.openapi = custom_openapi
 
 
 def _parse_cors_origins() -> list[str]:

@@ -12,7 +12,7 @@ sets it to `1`.
 | Page | Content |
 |---|---|
 | **Live feed & PTZ** | 2×2 HLS grid (`cam1`…`camN`), per-camera PTZ pad (hold-to-move) |
-| **Recording** | Global ON/OFF toggle (`PUT /api/recording`) — MediaMTX live + persist `RECORD_ENABLE` |
+| **Recording** | Continuous NVR toggle (`PUT /api/recording`) + local segment browser (`GET /api/recordings`, play via `/api/recordings/file/…`) |
 | **Monitor** | Live sensor tiles (door, cover, temp, impact, streams, disk) + alert stream |
 
 All data is **ingested** from existing tower surfaces — no duplicate monitoring
@@ -51,6 +51,8 @@ flowchart LR
 | Sensor snapshot | Watchdog status API | `GET /api/status` → proxied `GET /status` |
 | Live alerts | Local alert listener | Watchdog mirrors signed alerts → listener → `POST /ingest/alerts` → SSE |
 | PTZ buttons | PTZ daemon | `POST /api/ptz` → TCP JSON to `127.0.0.1:8765` |
+| Local recordings list | NVMe under `RECORD_PATH` | `GET /api/recordings` (closed `.mp4` segments) |
+| Local playback | Same path (+ remux cache) | `GET /api/recordings/file/camN/<file>.mp4` |
 
 **Video codecs:** module `50-mediamtx.sh` sets `hlsVariant: fmp4`, which remuxes
 H.264 and H.265 into HLS without per-camera code. For reliable playback in

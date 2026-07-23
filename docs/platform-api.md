@@ -6,14 +6,16 @@ The unified, SDK-facing HTTP API for the Kallon platform. It is served by the
 control plane service (`infra/enrollment-api/`, FastAPI) and consists of:
 
 - **Fleet endpoints** — customers/towers, backed directly by the Postgres registry.
-- **Tower proxy endpoints** — PTZ, snapshots, sensor status, stream readiness;
-  the control plane calls an authenticated **hub tower-proxy agent** on the
-  customer hub's public IP (`:8767`). The hub forwards over WireGuard to the
-  tower gateway (`infra/tower-dashboard/gateway.py`, `:8766` on the tower VPN IP).
-  Artemis does **not** join customer WireGuard meshes.
+- **Tower proxy endpoints** — PTZ, snapshots, sensor status, stream readiness,
+  continuous NVR toggle; the control plane calls an authenticated **hub
+  tower-proxy agent** on the customer hub's public IP (`:8767`). The hub
+  forwards over WireGuard to the tower gateway (`infra/tower-dashboard/gateway.py`,
+  `:8766` on the tower VPN IP). Artemis does **not** join customer WireGuard meshes.
 - **Live video endpoints** — HLS playlists/segments from the hub HLS agent
   (`:8768`) which remuxes tower RTSP via local MediaMTX. See
   [`docs/customer-live-video.md`](customer-live-video.md).
+- **Cloud recordings** — S3/B2 segment registry (ingest, list, playback,
+  download, delete, retention, ops purge). See §3c.
 - **Alert endpoints** — hub-forwarded tower events for customer dashboards
   (ingest, history, SSE fan-out).
 - **Enrollment endpoints** — pre-existing first-boot flow (unchanged).
@@ -23,7 +25,11 @@ tower directly. The client library for this API is
 [`sentinel-sdk`](https://github.com/Yaqcodes/sentinel-sdk). The buyer-facing
 web dashboard is [`sentinel-dashboard`](https://github.com/olowu289/sentinel-dashboard).
 
-Machine-readable spec: `GET /openapi.json` on a running control plane.
+Machine-readable / Swagger:
+
+- `GET /openapi.json` — OpenAPI 3 schema
+- `GET /docs` — Swagger UI
+- `GET /redoc` — ReDoc
 
 > **Auth status (July 2026):** if `KALLON_PLATFORM_API_KEY` is set, clients must
 > send `X-Kallon-Api-Key` (or `?api_key=` for HLS media). Soft gate when unset.
@@ -68,12 +74,18 @@ All platform endpoints (fleet + proxy) return errors as:
 
 | HTTP | code | Meaning |
 |------|------|---------|
-| 404 | `not_found` | Unknown customer/tower/camera |
+| 401 | `unauthorized` | Bad/missing `X-Kallon-Api-Key` or ingest token |
+| 404 | `not_found` | Unknown customer/tower/camera/segment |
 | 409 | `tower_not_enrolled` | Tower registered but has no VPN IP yet |
+| 409 | `conflict` | e.g. `POST /v1/towers` device already exists |
 | 422 | `invalid_request` | Malformed body/params |
 | 502 | `tower_error` | Tower reached, but its gateway returned an error |
+| 502 | `s3_error` | S3/B2 presign or delete failure |
 | 503 | `tower_offline` | Tower unreachable over VPN (tunnel down / rebooting) |
 | 503 | `registry_unavailable` | Registry DB unreachable |
+| 503 | `s3_not_configured` | Playback/download without Platform S3 credentials |
+| 503 | `hub_proxy_misconfigured` | Hub proxy token/host missing |
+| 503 | `stream_starting` | Live HLS not ready yet (clients should retry) |
 
 `tower_offline` example:
 
@@ -369,92 +381,44 @@ mediamtx unreachable:
 Continuous NVR toggle (MediaMTX + `RECORD_ENABLE` persist on tower). Proxied to
 tower `GET|PUT /api/recording`.
 
+**PUT body:** `{"enabled": true|false}`
+
 ### GET /v1/towers/{device_id}/recording (response excerpt)
 
 ```json
 {
   "enabled": true,
-  "segment_duration": "15m",
+  "desired": true,
+  "effective": true,
+  "record_path": "/var/kallon/recordings",
   "delete_after": "168h",
-  "upload": {"available": true, "pending": 2, "last_upload_at": "2026-07-15T12:30:00Z"}
+  "delete_after_effective": "168h",
+  "segment_duration": "15m",
+  "upload_enable": true,
+  "paths": [
+    {"name": "cam1", "record": true, "ready": true}
+  ],
+  "disk": {
+    "mount": "/var/kallon/recordings",
+    "space_total_gb": 1832.7,
+    "space_free_gb": 1700.0,
+    "space_used_gb": 132.7,
+    "source": "/dev/nvme0n1p1",
+    "on_nvme": true
+  },
+  "upload": {"available": true, "pending": 2, "last_upload_at": "2026-07-15T12:30:00Z"},
+  "warnings": []
 }
 ```
 
----
+Field notes (tower `device.env` / `record_settings.py`):
 
-## 3c. Cloud recordings (S3)
+- `segment_duration` ← `RECORD_MEDIAMTX_SEGMENT_FILE_DURATION` (default `15m`)
+- `delete_after` / `delete_after_effective` ← `RECORD_MEDIAMTX_DELETE_AFTER` (default `168h`)
+- `upload.available` is false when `.upload-state.json` is missing
 
-Tower upload workers (`scripts/kallon-recording-uploader.py`) write 15-minute
-fMP4 segments to NVMe, upload to a shared **Backblaze B2** bucket (S3-compatible),
-register metadata here, then delete local copies only after verified upload.
-
-Object layout: `{device_id}/cam{N}/{filename}.mp4`
-
-**Tenant isolation:** list/playback/delete routes are scoped by `customer_id`.
-A buyer session must only query its own customer prefix.
-
-**Retention:** default **30 days** (`platform_config.recording_retention_days` or
-`KALLON_RECORDING_RETENTION_DAYS` on Platform).
-
-### POST /v1/recordings/ingest (tower → platform)
-
-Optional gate: `KALLON_RECORDING_INGEST_TOKEN` / `X-Kallon-Ingest-Token` (same
-pattern as alert ingest).
-
-```json
-{
-  "device_id": "kln_acme_000042",
-  "camera": 1,
-  "filename": "2026-07-15_12-00-00-000000.mp4",
-  "s3_bucket": "kallon-recordings",
-  "s3_key": "kln_acme_000042/cam1/2026-07-15_12-00-00-000000.mp4",
-  "size_bytes": 52428800,
-  "sha256_hex": "…",
-  "started_at": "2026-07-15T12:00:00Z",
-  "ended_at": "2026-07-15T12:15:00Z",
-  "duration_sec": 900
-}
-```
-
-### GET /v1/customers/{customer_id}/recordings
-
-Query: `device_id`, `camera`, `from_ts`, `to_ts`, `limit`, `offset`.
-
-```json
-{
-  "customer_id": "cust_acme",
-  "retention_days": 30,
-  "segments": [
-    {
-      "segment_id": "…",
-      "device_id": "kln_acme_000042",
-      "camera": 1,
-      "filename": "2026-07-15_12-00-00-000000.mp4",
-      "size_bytes": 52428800,
-      "started_at": "2026-07-15T12:00:00+00:00",
-      "duration_sec": 900
-    }
-  ]
-}
-```
-
-### GET …/recordings/{segment_id}/playback | /download
-
-Returns a presigned B2/S3 URL (requires Platform credentials:
-`KALLON_S3_BUCKET`, `KALLON_S3_ENDPOINT`, `KALLON_S3_REGION`, `AWS_ACCESS_KEY_ID`,
-`AWS_SECRET_ACCESS_KEY`).
-
-```json
-{"segment_id": "…", "url": "https://…", "expires_in": 3600}
-```
-
-### DELETE …/recordings/{segment_id}
-
-Deletes S3 object (when configured) and registry row.
-
-### GET|PUT /v1/platform/recording-retention
-
-Read or update global retention days (default 30).
+PUT success returns the same status object plus `ok`, `persist_ok`, and optional
+`persist_error` / `path_errors`.
 
 ---
 
@@ -493,7 +457,175 @@ HLS playlist (`application/vnd.apple.mpegurl`). May return `503` with
 
 Segments / fMP4 parts under the same auth as the playlist.
 
-Env: `KALLON_HUB_HLS_PORT` (default `8768`), `KALLON_LIVE_READ_TIMEOUT` (default `60`).
+Env: `KALLON_HUB_HLS_PORT` (default `8768`), `KALLON_LIVE_READ_TIMEOUT` (default `90`).
+
+---
+
+## 3c. Cloud recordings (S3 / Backblaze B2)
+
+Tower upload workers (`scripts/kallon-recording-uploader.py`) close MediaMTX
+segments (default **15m**), remux fMP4 → progressive MP4 (`+faststart`), upload
+to a shared **Backblaze B2** bucket (S3-compatible), register metadata here, then
+keep or delete locals per `RECORD_LOCAL_DELETE_AFTER_UPLOAD` / retention policy.
+
+Object layout: `{device_id}/cam{N}/{filename}.mp4`
+
+**Tenant isolation:** list/get/playback/download/delete are scoped by
+`customer_id`. A buyer session must only query its own customer.
+
+**Cloud retention:** default **30 days** (`platform_config.recording_retention_days`
+or `KALLON_RECORDING_RETENTION_DAYS` on Platform). Independent of tower local
+retention (`RECORD_MEDIAMTX_DELETE_AFTER`, default `168h`).
+
+Public segment fields never include `s3_bucket` / `s3_key`.
+
+### POST /v1/recordings/ingest (tower → platform)
+
+Auth: `X-Kallon-Ingest-Token` when `KALLON_RECORDING_INGEST_TOKEN` is set
+(falls back to `KALLON_ALERT_INGEST_TOKEN`). Soft-open when neither is set.
+
+Request:
+
+```json
+{
+  "device_id": "kln_acme_000042",
+  "camera": 1,
+  "filename": "2026-07-15_12-00-00-000000.mp4",
+  "s3_bucket": "kallon-recordings",
+  "s3_key": "kln_acme_000042/cam1/2026-07-15_12-00-00-000000.mp4",
+  "size_bytes": 52428800,
+  "sha256_hex": "…",
+  "started_at": "2026-07-15T12:00:00Z",
+  "ended_at": "2026-07-15T12:15:00Z",
+  "duration_sec": 900
+}
+```
+
+`sha256_hex`, `ended_at`, and `duration_sec` are optional. `camera` is 1–32.
+
+Response `201`:
+
+```json
+{
+  "segment": {
+    "segment_id": "<uuid>",
+    "customer_id": "cust_acme",
+    "device_id": "kln_acme_000042",
+    "camera": 1,
+    "filename": "2026-07-15_12-00-00-000000.mp4",
+    "size_bytes": 52428800,
+    "sha256_hex": "…",
+    "started_at": "2026-07-15T12:00:00+00:00",
+    "ended_at": "2026-07-15T12:15:00+00:00",
+    "uploaded_at": "2026-07-15T12:16:02+00:00",
+    "duration_sec": 900
+  }
+}
+```
+
+Errors: `401`, `404` (unknown device), `422`, `503 registry_unavailable`.
+
+### POST /v1/recordings/purge-device (ops / tower reset)
+
+Removes **registry rows** for a device. **Does not delete S3/B2 objects** —
+operators must purge the bucket separately if needed.
+
+Auth: same ingest gate as `/v1/recordings/ingest`.
+
+Request:
+
+```json
+{"device_id": "kln_acme_000042"}
+```
+
+Response `200`:
+
+```json
+{"device_id": "kln_acme_000042", "deleted_segments": 12}
+```
+
+### GET /v1/customers/{customer_id}/recordings
+
+Auth: platform API key. Query: `device_id`, `camera`, `from_ts`, `to_ts`
+(ISO-8601 bounds on `started_at`), `limit` (default 100), `offset` (default 0).
+
+```json
+{
+  "customer_id": "cust_acme",
+  "retention_days": 30,
+  "segments": [
+    {
+      "segment_id": "…",
+      "customer_id": "cust_acme",
+      "device_id": "kln_acme_000042",
+      "camera": 1,
+      "filename": "2026-07-15_12-00-00-000000.mp4",
+      "size_bytes": 52428800,
+      "sha256_hex": "…",
+      "started_at": "2026-07-15T12:00:00+00:00",
+      "ended_at": "2026-07-15T12:15:00+00:00",
+      "uploaded_at": "2026-07-15T12:16:02+00:00",
+      "duration_sec": 900
+    }
+  ]
+}
+```
+
+### GET /v1/customers/{customer_id}/recordings/{segment_id}
+
+Returns one segment if it belongs to that customer (cross-tenant IDs → `404`).
+
+```json
+{"segment": { "segment_id": "…", "customer_id": "cust_acme", "…": "…" }}
+```
+
+### GET /v1/customers/{customer_id}/recordings/{segment_id}/playback
+
+Auth: platform API key. Requires S3 configured (`KALLON_S3_BUCKET`,
+`KALLON_S3_ENDPOINT`, `KALLON_S3_REGION`, `AWS_ACCESS_KEY_ID`,
+`AWS_SECRET_ACCESS_KEY`). Optional TTL: `KALLON_S3_PRESIGN_TTL_SEC`
+(default 3600, clamped 60–86400).
+
+```json
+{"segment_id": "…", "url": "https://…", "expires_in": 3600}
+```
+
+Errors: `503 s3_not_configured`, `502 s3_error`, `404`.
+
+### GET /v1/customers/{customer_id}/recordings/{segment_id}/download
+
+Same JSON shape as playback, but the presigned URL forces
+`Content-Disposition: attachment; filename="<segment.filename>"`.
+
+### DELETE /v1/customers/{customer_id}/recordings/{segment_id}
+
+Deletes the S3 object when S3 is configured, then the registry row. If S3 is
+not configured, deletes the registry row only. If S3 delete fails, the
+registry row is kept (`502 s3_error`).
+
+```json
+{"status": "deleted", "segment_id": "…"}
+```
+
+### GET /v1/platform/recording-retention
+
+Auth: platform API key.
+
+```json
+{"retention_days": 30}
+```
+
+Resolution: `KALLON_RECORDING_RETENTION_DAYS` env →
+`platform_config.recording_retention_days` → default `30` (min 1).
+
+### PUT /v1/platform/recording-retention
+
+```json
+{"retention_days": 45}
+```
+
+Persists to `platform_config`. Response: `{"retention_days": 45}`.
+`422` if not a positive integer.
 
 ---
 
@@ -660,15 +792,25 @@ Deploy / migrate hubs with `scripts/kallon-gateway-ensure-tower-proxy.sh`.
 
 | Method | Path | Notes |
 |--------|------|-------|
+| GET | `/api/config` | Device id + camera list (lab SPA) |
+| GET | `/api/events` | SSE alerts (lab) |
 | GET | `/api/snapshot/cam{n}` | JPEG via ffmpeg |
+| POST | `/api/snapshot` | Save JPEG to disk (SPA) |
+| POST | `/api/ptz` | SPA JSON-RPC relay to PTZ daemon |
 | POST | `/api/ptz/move` | REST shape, same body as platform |
 | POST | `/api/ptz/stop` | |
 | GET | `/api/ptz/status?camera=n` | |
 | GET | `/api/status` | Watchdog proxy |
 | GET | `/api/streams` | mediamtx proxy |
 | GET | `/api/recording` | NVR status + upload queue |
-| PUT | `/api/recording` | Enable/disable continuous recording |
+| PUT / POST | `/api/recording` | Enable/disable continuous recording |
+| GET | `/api/recordings` | Local MP4 list (`?camera=&limit=`) — **not** Platform-proxied |
+| GET | `/api/recordings/file/cam{n}/{file}.mp4` | Range stream (remux cache for playback) |
+| POST | `/ingest/alerts` | Local listener → gateway |
 | GET | `/healthz` | |
+
+Buyer historical playback uses cloud routes under `/v1/customers/…/recordings…`.
+Local `/api/recordings*` is Jetson/lab only.
 
 Gateway binding: `DASH_BIND=wg0` resolves the WireGuard interface address at
 startup (loopback listener retained for the on-Jetson SPA). Port `8766` is

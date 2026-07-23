@@ -3,17 +3,18 @@
 Tower upload workers POST metadata after a verified S3 put (see
 scripts/kallon-recording-uploader.py). Customers list/query/delete only
 segments belonging to their customer_id — enforced on every route.
+
+Contract: docs/platform-api.md §3c. OpenAPI: GET /docs (tag Recordings).
 """
 from __future__ import annotations
 
-import json
 import logging
 import os
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, ValidationError
 
@@ -28,6 +29,79 @@ log = logging.getLogger("recordings")
 router = APIRouter(prefix="/v1", tags=["Recordings"])
 
 RECORDING_INGEST_TOKEN = os.environ.get("KALLON_RECORDING_INGEST_TOKEN", "").strip()
+
+
+# ── OpenAPI models ───────────────────────────────────────────────────────────
+
+class RecordingSegmentPublic(BaseModel):
+    """Public segment metadata (S3 bucket/key intentionally omitted)."""
+
+    segment_id: str
+    customer_id: str
+    device_id: str
+    camera: int
+    filename: str
+    size_bytes: int
+    sha256_hex: Optional[str] = None
+    started_at: Optional[str] = None
+    ended_at: Optional[str] = None
+    uploaded_at: Optional[str] = None
+    duration_sec: Optional[int] = None
+
+
+class RecordingIngestRequest(BaseModel):
+    device_id: str = Field(..., description="Tower device_id (must already exist in registry)")
+    camera: int = Field(..., ge=1, le=32)
+    filename: str
+    s3_bucket: str
+    s3_key: str
+    size_bytes: int = Field(..., ge=1)
+    sha256_hex: Optional[str] = None
+    started_at: str = Field(..., description="ISO-8601 UTC segment start")
+    ended_at: Optional[str] = None
+    duration_sec: Optional[int] = Field(default=None, ge=1)
+
+
+class RecordingIngestResponse(BaseModel):
+    segment: RecordingSegmentPublic
+
+
+class RecordingListResponse(BaseModel):
+    customer_id: str
+    retention_days: int
+    segments: list[RecordingSegmentPublic]
+
+
+class RecordingGetResponse(BaseModel):
+    segment: RecordingSegmentPublic
+
+
+class PresignResponse(BaseModel):
+    segment_id: str
+    url: str
+    expires_in: int
+
+
+class DeleteResponse(BaseModel):
+    status: str
+    segment_id: str
+
+
+class PurgeDeviceRequest(BaseModel):
+    device_id: str = Field(..., description="Tower whose registry rows should be removed")
+
+
+class PurgeDeviceResponse(BaseModel):
+    device_id: str
+    deleted_segments: int
+
+
+class RetentionResponse(BaseModel):
+    retention_days: int
+
+
+class RetentionUpdateRequest(BaseModel):
+    retention_days: int = Field(..., ge=1, description="Cloud retention window in days")
 
 
 def _retention_days(reg) -> int:
@@ -100,22 +174,18 @@ def _load_segment_for_customer(segment_id: str, customer_id: str, reg) -> tuple[
     return seg, None
 
 
-class RecordingIngestRequest(BaseModel):
-    device_id: str
-    camera: int = Field(ge=1, le=32)
-    filename: str
-    s3_bucket: str
-    s3_key: str
-    size_bytes: int = Field(ge=1)
-    sha256_hex: Optional[str] = None
-    started_at: str
-    ended_at: Optional[str] = None
-    duration_sec: Optional[int] = Field(default=None, ge=1)
-
-
-@router.post("/recordings/ingest", status_code=201)
+@router.post(
+    "/recordings/ingest",
+    status_code=201,
+    response_model=RecordingIngestResponse,
+    summary="Ingest uploaded segment metadata",
+    description=(
+        "Tower upload worker registers a verified S3/B2 object after put. "
+        "Auth: `X-Kallon-Ingest-Token` when `KALLON_RECORDING_INGEST_TOKEN` "
+        "(or fallback `KALLON_ALERT_INGEST_TOKEN`) is set."
+    ),
+)
 async def ingest_recording(request: Request):
-    """Tower upload worker registers a verified S3 object."""
     if (resp := _ingest_auth(request)) is not None:
         return resp
     try:
@@ -167,19 +237,25 @@ async def ingest_recording(request: Request):
     return JSONResponse(status_code=201, content={"segment": _segment_public(saved)})
 
 
-@router.post("/recordings/purge-device")
+@router.post(
+    "/recordings/purge-device",
+    response_model=PurgeDeviceResponse,
+    summary="Purge device recording registry rows",
+    description=(
+        "Ops/reset: delete all `recording_segments` rows for a device. "
+        "**Does not delete S3/B2 objects** — purge the bucket separately if needed. "
+        "Auth: same ingest token as `/v1/recordings/ingest`."
+    ),
+)
 async def purge_device_recordings(request: Request):
-    """Ops: remove all registry rows for a device (S3 objects deleted separately).
-
-    Auth: X-Kallon-Ingest-Token (same as upload ingest). Body: {"device_id": "..."}.
-    """
     if (resp := _ingest_auth(request)) is not None:
         return resp
     try:
-        body = json.loads(await request.body() or b"{}")
-    except json.JSONDecodeError:
-        return _err(422, "invalid_request", "body must be JSON")
-    device_id = str(body.get("device_id") or "").strip()
+        payload = PurgeDeviceRequest.model_validate_json(await request.body() or b"{}")
+    except ValidationError as e:
+        return _err(422, "invalid_request", f"invalid request body: {e.errors()}")
+
+    device_id = payload.device_id.strip()
     if not device_id:
         return _err(422, "invalid_request", "device_id is required")
 
@@ -203,16 +279,24 @@ async def purge_device_recordings(request: Request):
     return {"device_id": device_id, "deleted_segments": deleted}
 
 
-@router.get("/customers/{customer_id}/recordings")
+@router.get(
+    "/customers/{customer_id}/recordings",
+    response_model=RecordingListResponse,
+    summary="List customer recording segments",
+    description=(
+        "Tenant-scoped list. Filters apply to `started_at`. "
+        "`s3_bucket` / `s3_key` are not returned. Auth: `X-Kallon-Api-Key` when configured."
+    ),
+)
 def list_customer_recordings(
     customer_id: str,
     request: Request,
-    device_id: Optional[str] = None,
-    camera: Optional[int] = None,
-    from_ts: Optional[str] = None,
-    to_ts: Optional[str] = None,
-    limit: int = 100,
-    offset: int = 0,
+    device_id: Optional[str] = Query(default=None, description="Filter by tower device_id"),
+    camera: Optional[int] = Query(default=None, ge=1, le=32, description="Filter by camera index"),
+    from_ts: Optional[str] = Query(default=None, description="ISO-8601 lower bound on started_at"),
+    to_ts: Optional[str] = Query(default=None, description="ISO-8601 upper bound on started_at"),
+    limit: int = Query(default=100, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
 ):
     if (resp := _auth_check(request)) is not None:
         return resp
@@ -248,7 +332,12 @@ def list_customer_recordings(
     }
 
 
-@router.get("/customers/{customer_id}/recordings/{segment_id}")
+@router.get(
+    "/customers/{customer_id}/recordings/{segment_id}",
+    response_model=RecordingGetResponse,
+    summary="Get one recording segment",
+    description="Returns the segment if it belongs to this customer; otherwise 404.",
+)
 def get_customer_recording(customer_id: str, segment_id: str, request: Request):
     if (resp := _auth_check(request)) is not None:
         return resp
@@ -261,7 +350,15 @@ def get_customer_recording(customer_id: str, segment_id: str, request: Request):
     return {"segment": _segment_public(seg)}
 
 
-@router.get("/customers/{customer_id}/recordings/{segment_id}/playback")
+@router.get(
+    "/customers/{customer_id}/recordings/{segment_id}/playback",
+    response_model=PresignResponse,
+    summary="Presigned playback URL",
+    description=(
+        "Inline playback presign (no Content-Disposition attachment). "
+        "Requires Platform S3/B2 credentials. TTL: `KALLON_S3_PRESIGN_TTL_SEC` (default 3600)."
+    ),
+)
 def recording_playback(customer_id: str, segment_id: str, request: Request):
     if (resp := _auth_check(request)) is not None:
         return resp
@@ -281,7 +378,15 @@ def recording_playback(customer_id: str, segment_id: str, request: Request):
     return {"segment_id": segment_id, **presigned}
 
 
-@router.get("/customers/{customer_id}/recordings/{segment_id}/download")
+@router.get(
+    "/customers/{customer_id}/recordings/{segment_id}/download",
+    response_model=PresignResponse,
+    summary="Presigned download URL",
+    description=(
+        "Same as playback, but the presigned URL forces "
+        "`Content-Disposition: attachment; filename=\"<segment.filename>\"`."
+    ),
+)
 def recording_download(customer_id: str, segment_id: str, request: Request):
     if (resp := _auth_check(request)) is not None:
         return resp
@@ -306,7 +411,15 @@ def recording_download(customer_id: str, segment_id: str, request: Request):
     return {"segment_id": segment_id, **presigned}
 
 
-@router.delete("/customers/{customer_id}/recordings/{segment_id}")
+@router.delete(
+    "/customers/{customer_id}/recordings/{segment_id}",
+    response_model=DeleteResponse,
+    summary="Delete recording segment",
+    description=(
+        "Deletes the S3 object when S3 is configured, then the registry row. "
+        "If S3 delete fails, the registry row is kept (`502 s3_error`)."
+    ),
+)
 def delete_recording(customer_id: str, segment_id: str, request: Request):
     if (resp := _auth_check(request)) is not None:
         return resp
@@ -333,7 +446,15 @@ def delete_recording(customer_id: str, segment_id: str, request: Request):
     return {"status": "deleted", "segment_id": segment_id}
 
 
-@router.get("/platform/recording-retention")
+@router.get(
+    "/platform/recording-retention",
+    response_model=RetentionResponse,
+    summary="Get cloud recording retention",
+    description=(
+        "Resolution: `KALLON_RECORDING_RETENTION_DAYS` env → "
+        "`platform_config.recording_retention_days` → default `30`."
+    ),
+)
 def get_recording_retention(request: Request):
     if (resp := _auth_check(request)) is not None:
         return resp
@@ -345,19 +466,20 @@ def get_recording_retention(request: Request):
     return {"retention_days": days}
 
 
-@router.put("/platform/recording-retention")
+@router.put(
+    "/platform/recording-retention",
+    response_model=RetentionResponse,
+    summary="Set cloud recording retention",
+    description="Persists `retention_days` to `platform_config` (min 1).",
+)
 async def set_recording_retention(request: Request):
     if (resp := _auth_check(request)) is not None:
         return resp
     try:
-        body = json.loads(await request.body() or b"{}")
-    except json.JSONDecodeError:
-        return _err(422, "invalid_request", "body is not valid JSON")
-    raw = body.get("retention_days")
-    try:
-        days = max(1, int(raw))
-    except (TypeError, ValueError):
-        return _err(422, "invalid_request", "retention_days must be a positive integer")
+        payload = RetentionUpdateRequest.model_validate_json(await request.body() or b"{}")
+    except ValidationError as e:
+        return _err(422, "invalid_request", f"invalid request body: {e.errors()}")
+    days = max(1, int(payload.retention_days))
     reg = get_registry()
     try:
         reg.set_platform_config("recording_retention_days", str(days))
