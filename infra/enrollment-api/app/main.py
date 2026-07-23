@@ -224,6 +224,20 @@ def _startup_checks() -> None:
     # Never raises — logs everything an operator needs to fix a misconfigured
     # deploy before it strands a real tower. See peering.startup_check().
     peering.startup_check()
+    # Ensure registry migrations are applied (idempotent). Railway also runs
+    # this as releaseCommand, but that historically only executed the first
+    # statement of each .sql file under psycopg3 — so re-apply at boot.
+    try:
+        reg = get_registry()
+        try:
+            reg.init_schema()
+            log.info("registry schema ok (init_schema)")
+        finally:
+            reg.close()
+    except Exception:  # noqa: BLE001
+        log.exception(
+            "registry init_schema failed at startup — fleet/recordings may 500 until fixed"
+        )
     via_hub = os.environ.get("KALLON_PROXY_VIA_HUB", "1").strip().lower() not in (
         "0", "false", "no", "off",
     )

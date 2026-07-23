@@ -1,15 +1,15 @@
 """PostgreSQL RegistryProvider — production store on the Terra physical server.
 
 Requires psycopg (v3). Configure with DATABASE_URL (LAN / ops-VPN only; never
-public). Applies migrations/001_initial.sql on init_schema().
+public). Applies migrations/*.sql on init_schema() (idempotent CREATE IF NOT EXISTS).
 """
 from __future__ import annotations
 
 import json
+import logging
 import os
-from pathlib import Path
 from datetime import datetime
-
+from pathlib import Path
 from typing import Any, Optional
 
 try:  # psycopg is only needed in production, not for SQLite unit tests.
@@ -17,8 +17,6 @@ try:  # psycopg is only needed in production, not for SQLite unit tests.
     from psycopg.rows import dict_row
 except ImportError:  # pragma: no cover
     psycopg = None  # type: ignore
-
-from datetime import datetime
 
 from .interface import (
     Conflict,
@@ -30,7 +28,25 @@ from .interface import (
     Tower,
 )
 
+log = logging.getLogger("registry.postgres")
+
 _MIGRATIONS_DIR = Path(__file__).parent / "migrations"
+
+
+def _split_sql_statements(script: str) -> list[str]:
+    """Split a simple SQL migration into statements.
+
+    psycopg3 ``cursor.execute()`` only runs one statement. Our migration files
+    are plain DDL/DML (no dollar-quoted bodies), so stripping ``--`` comments
+    and splitting on ``;`` is enough.
+    """
+    lines: list[str] = []
+    for line in script.splitlines():
+        if "--" in line:
+            line = line[: line.index("--")]
+        lines.append(line)
+    body = "\n".join(lines)
+    return [s.strip() for s in body.split(";") if s.strip()]
 
 _CUSTOMER_COLS = [
     "customer_id", "display_name", "vpn_subnet", "gateway_id", "gateway_endpoint",
@@ -56,8 +72,11 @@ class PostgresRegistry(RegistryProvider):
     def init_schema(self) -> None:
         for path in sorted(_MIGRATIONS_DIR.glob("*.sql")):
             sql = path.read_text(encoding="utf-8")
+            statements = _split_sql_statements(sql)
             with self._conn.cursor() as cur:
-                cur.execute(sql)
+                for stmt in statements:
+                    cur.execute(stmt)
+            log.info("applied migration %s (%d statements)", path.name, len(statements))
         self._conn.commit()
 
     def close(self) -> None:

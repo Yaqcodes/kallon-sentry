@@ -255,10 +255,13 @@ def ptz_command(payload: dict[str, Any]) -> dict[str, Any]:
     if isinstance(cam, float) and cam.is_integer():
         params["camera"] = int(cam)
     request_line = json.dumps({"id": 1, "method": method, "params": params}) + "\n"
+    # Status is polled often; keep it short so a stuck ONVIF camera cannot
+    # block moves. Continuous move / stop need a little more headroom.
+    io_timeout = 4.0 if method == "status" else 12.0
     try:
-        with socket.create_connection((PTZ_HOST, PTZ_PORT), timeout=10.0) as sock:
+        with socket.create_connection((PTZ_HOST, PTZ_PORT), timeout=3.0) as sock:
             sock.sendall(request_line.encode("utf-8"))
-            sock.settimeout(10.0)
+            sock.settimeout(io_timeout)
             buf = b""
             while b"\n" not in buf:
                 chunk = sock.recv(4096)

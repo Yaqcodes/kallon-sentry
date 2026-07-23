@@ -34,7 +34,7 @@ DEFAULT_PORT = 80
 DEFAULT_USER = "admin"
 DEFAULT_PASSWORD = os.environ.get("CAMERA_PASSWORD", "")
 # How long each ONVIF HTTP call may take before failing (helps avoid hangs)
-DEFAULT_REQUEST_TIMEOUT_SEC = 15.0
+DEFAULT_REQUEST_TIMEOUT_SEC = 5.0
 
 
 def resolve_wsdl_dir(cli_wsdl_dir: str | None) -> str:

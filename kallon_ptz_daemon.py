@@ -96,9 +96,9 @@ class CameraPool:
     """Lazily opens and caches one ONVIF session per camera index.
 
     Connections are created on first use for a given camera, so a single
-    offline camera does not prevent the daemon from serving the others. All
-    dispatch happens under the caller's single command lock, so no additional
-    locking is required here.
+    offline camera does not prevent the daemon from serving the others.
+    Per-camera asyncio locks (see client_loop) keep one command in flight
+    per camera without letting a hung status on camN block moves on camM.
     """
 
     def __init__(
@@ -113,6 +113,10 @@ class CameraPool:
         self._timeout = timeout
         self._wsdl_dir = wsdl_dir
         self._default_profile = default_profile
+        self.camera_locks: dict[int, asyncio.Lock] = {
+            s.index: asyncio.Lock() for s in specs
+        }
+        self.meta_lock = asyncio.Lock()
 
     def describe(self) -> list[dict[str, Any]]:
         return [
@@ -336,7 +340,6 @@ async def client_loop(
     reader: asyncio.StreamReader,
     writer: asyncio.StreamWriter,
     pool: CameraPool,
-    cmd_lock: asyncio.Lock,
 ) -> None:
     peer = writer.get_extra_info("peername")
     while True:
@@ -354,8 +357,20 @@ async def client_loop(
             await writer.drain()
             continue
 
+        # Per-camera locks: a hung ONVIF status on cam2 must not block moves on cam1.
+        if method in ("ping", "list_cameras"):
+            lock = pool.meta_lock
+        else:
+            try:
+                cam_index = _resolve_camera_index(params)
+            except ValueError as e:
+                writer.write(format_error(rid, "BAD_REQUEST", str(e)).encode())
+                await writer.drain()
+                continue
+            lock = pool.camera_locks.get(cam_index) or pool.meta_lock
+
         try:
-            async with cmd_lock:
+            async with lock:
                 result = await asyncio.to_thread(dispatch, pool, method, params)
             writer.write(format_response(rid, result).encode())
         except Exception as e:
@@ -372,13 +387,11 @@ async def client_loop(
 
 
 async def run_tcp(pool: CameraPool, host: str, port: int) -> None:
-    cmd_lock = asyncio.Lock()
-
     async def _cb(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-        await client_loop(reader, writer, pool, cmd_lock)
+        await client_loop(reader, writer, pool)
 
     server = await asyncio.start_server(_cb, host=host, port=port)
-    LOG.info("listening TCP %s:%s", host, port)
+    LOG.info("listening TCP %s:%s cameras=%s", host, port, sorted(pool._specs))
     async with server:
         await server.serve_forever()
 
@@ -392,14 +405,12 @@ async def run_unix(pool: CameraPool, path: str) -> None:
     except FileNotFoundError:
         pass
 
-    cmd_lock = asyncio.Lock()
-
     async def _cb(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-        await client_loop(reader, writer, pool, cmd_lock)
+        await client_loop(reader, writer, pool)
 
     server = await asyncio.start_unix_server(_cb, path=path)
     os.chmod(path, 0o600)
-    LOG.info("listening Unix socket %s", path)
+    LOG.info("listening Unix socket %s cameras=%s", path, sorted(pool._specs))
     async with server:
         await server.serve_forever()
 
