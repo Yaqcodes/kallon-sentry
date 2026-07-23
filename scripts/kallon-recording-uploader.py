@@ -14,6 +14,7 @@ import json
 import logging
 import os
 import re
+import subprocess
 import sys
 import time
 import urllib.error
@@ -238,18 +239,57 @@ def discover_pending(
     return pending
 
 
-def upload_and_verify(client, bucket: str, key: str, path: Path, digest: Optional[str]) -> None:
-    local_size = path.stat().st_size
-    # Skip re-upload when the object is already present at the expected size
-    # (common after ingest outages left orphans in B2).
+def remux_progressive(src: Path) -> Path:
+    """Remux MediaMTX fMP4 → progressive MP4 (moov at start) for browser/VLC playback.
+
+    Returns a temp path the caller must delete. Stream-copy only (no re-encode).
+    """
+    import tempfile
+
+    fd, name = tempfile.mkstemp(prefix="kallon-remux-", suffix=".mp4")
+    os.close(fd)
+    dst = Path(name)
+    cmd = [
+        "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+        "-i", str(src),
+        "-c", "copy",
+        "-movflags", "+faststart",
+        str(dst),
+    ]
     try:
-        head = client.head_object(Bucket=bucket, Key=key)
-        remote_size = int(head.get("ContentLength") or 0)
-        if remote_size == local_size:
-            log.info("s3 object already present %s (%s bytes) — skip put", key, local_size)
-            return
-    except Exception:
-        pass
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=1800, check=False)
+    except FileNotFoundError as exc:
+        dst.unlink(missing_ok=True)
+        raise RuntimeError("ffmpeg not installed — required to remux recordings for playback") from exc
+    except subprocess.TimeoutExpired as exc:
+        dst.unlink(missing_ok=True)
+        raise RuntimeError(f"ffmpeg remux timed out for {src.name}") from exc
+    if proc.returncode != 0 or not dst.is_file() or dst.stat().st_size < 1:
+        err = (proc.stderr or proc.stdout or "ffmpeg failed").strip()[-500:]
+        dst.unlink(missing_ok=True)
+        raise RuntimeError(f"ffmpeg remux failed for {src.name}: {err}")
+    return dst
+
+
+def upload_and_verify(
+    client,
+    bucket: str,
+    key: str,
+    path: Path,
+    digest: Optional[str],
+    *,
+    force: bool = False,
+) -> None:
+    local_size = path.stat().st_size
+    if not force:
+        try:
+            head = client.head_object(Bucket=bucket, Key=key)
+            remote_size = int(head.get("ContentLength") or 0)
+            if remote_size == local_size:
+                log.info("s3 object already present %s (%s bytes) — skip put", key, local_size)
+                return
+        except Exception:
+            pass
 
     extra: dict[str, Any] = {
         "ContentType": "video/mp4",
@@ -364,22 +404,28 @@ def process_once() -> int:
 
     for path, rel, camera in pending[:concurrency]:
         write_state(uploading=1)
+        remuxed: Optional[Path] = None
         try:
-            digest = sha256_file(path) if compute_sha else None
+            # MediaMTX writes fragmented MP4; browsers/VLC need progressive (faststart).
+            remuxed = remux_progressive(path)
+            upload_path = remuxed
+            digest = sha256_file(upload_path) if compute_sha else None
             filename = path.name
             key = s3_object_key(device_id, camera, filename)
-            upload_and_verify(client, bucket, key, path, digest)
-            started = parse_segment_start(filename) or datetime.fromtimestamp(
-                path.stat().st_mtime, tz=timezone.utc
+            # Always put remuxed bytes (size differs from raw fMP4 — do not skip on old size).
+            upload_and_verify(client, bucket, key, upload_path, digest, force=True)
+            # Remuxed size differs from raw fMP4; force put so old fMP4 objects are replaced.
+            started = parse_segment_start(filename) or datetime.fromtimestamp(                path.stat().st_mtime, tz=timezone.utc
             )
             ended = started + timedelta(seconds=segment_duration_sec)
+            upload_size = upload_path.stat().st_size
             ingest = {
                 "device_id": device_id,
                 "camera": camera,
                 "filename": filename,
                 "s3_bucket": bucket,
                 "s3_key": key,
-                "size_bytes": path.stat().st_size,
+                "size_bytes": upload_size,
                 "started_at": started.strftime("%Y-%m-%dT%H:%M:%SZ"),
                 "ended_at": ended.strftime("%Y-%m-%dT%H:%M:%SZ"),
                 "duration_sec": segment_duration_sec,
@@ -390,8 +436,9 @@ def process_once() -> int:
             manifest.setdefault("uploaded", {})[rel] = {
                 "s3_key": key,
                 "sha256_hex": digest,
-                "size_bytes": path.stat().st_size,
+                "size_bytes": upload_size,
                 "uploaded_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "remuxed": True,
             }
             save_manifest(manifest)
             maybe_delete_local(path, manifest["uploaded"][rel])
@@ -401,11 +448,17 @@ def process_once() -> int:
                 last_upload_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
                 last_error=None,
             )
-            log.info("uploaded %s → s3://%s/%s", rel, bucket, key)
+            log.info("uploaded %s → s3://%s/%s (remuxed %s bytes)", rel, bucket, key, upload_size)
         except Exception as exc:  # noqa: BLE001
             log.exception("upload failed for %s", rel)
             write_state(last_error=str(exc))
             break
+        finally:
+            if remuxed is not None:
+                try:
+                    remuxed.unlink(missing_ok=True)
+                except OSError:
+                    pass
 
     prune_uploaded_locals(root, manifest)
     remaining = discover_pending(root, manifest, stable_sec=stable_sec)

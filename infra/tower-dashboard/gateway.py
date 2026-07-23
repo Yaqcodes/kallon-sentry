@@ -513,6 +513,37 @@ def resolve_local_recording_file(cam_dir: str, filename: str) -> Optional[Path]:
     return candidate
 
 
+def ensure_playable_recording(src: Path) -> Path:
+    """Remux MediaMTX fMP4 to progressive MP4 for <video>/VLC; cache beside source."""
+    cache_dir = Path(_record_path()) / ".play-cache" / src.parent.name
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    dst = cache_dir / src.name
+    try:
+        if dst.is_file() and dst.stat().st_mtime >= src.stat().st_mtime and dst.stat().st_size > 0:
+            return dst
+    except OSError:
+        pass
+    cmd = [
+        "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+        "-i", str(src),
+        "-c", "copy",
+        "-movflags", "+faststart",
+        str(dst),
+    ]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=1800, check=False)
+    except FileNotFoundError:
+        log.warning("ffmpeg missing — serving raw fMP4 for %s", src)
+        return src
+    except subprocess.TimeoutExpired:
+        log.warning("ffmpeg remux timeout for %s — serving raw", src)
+        return src
+    if proc.returncode != 0 or not dst.is_file():
+        log.warning("ffmpeg remux failed for %s — serving raw", src)
+        return src
+    return dst
+
+
 def recording_status() -> dict[str, Any]:
     """Desired (device.env) + effective (MediaMTX path config) recording state."""
     settings = _record_settings()
@@ -918,6 +949,7 @@ class Handler(BaseHTTPRequestHandler):
         if path is None:
             self._json(404, {"error": {"code": "not_found", "message": "recording not found"}})
             return
+        path = ensure_playable_recording(path)
         try:
             size = path.stat().st_size
         except OSError as exc:

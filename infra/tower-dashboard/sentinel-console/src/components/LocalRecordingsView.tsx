@@ -109,9 +109,6 @@ export default function LocalRecordingsView({ onBackToLive }: Props) {
               <div className="rec-row-meta">{formatBytes(s.size_bytes)}</div>
               <div className="rec-row-actions">
                 <button type="button" className="ctl-btn" onClick={() => setPlaying(s)}>Play</button>
-                <a className="ctl-btn" style={{ textAlign: 'center', textDecoration: 'none' }} href={s.playback_url} download={s.filename}>
-                  Download
-                </a>
               </div>
             </div>
           ))}
@@ -126,6 +123,8 @@ export default function LocalRecordingsView({ onBackToLive }: Props) {
               className="rec-player"
               controls
               autoPlay
+              playsInline
+              preload="metadata"
               src={playing.playback_url}
             />
           ) : (
