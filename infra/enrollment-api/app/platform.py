@@ -16,9 +16,13 @@ Error contract (platform endpoints only — enrollment keeps FastAPI "detail"):
 
   {"error": {"code": "...", "message": "...", ...context}}
 
+  Hop-specific codes (prefer these over vague tower_offline when earlier hop fails):
+  503 hub_not_provisioned | hub_proxy_misconfigured | hub_proxy_unreachable
+  503 hub_proxy_timeout | hub_hls_unreachable | hub_mediamtx_unreachable
+  502 hub_proxy_auth_failed
+  503 tower_offline (hub→tower :8766 only) | tower_unreachable | tower_timeout
   404 not_found | 409 tower_not_enrolled | 422 invalid_request
-  502 tower_error | 503 tower_offline | 503 registry_unavailable
-  503 stream_starting (HLS not ready yet — client should retry)
+  502 tower_error | 503 registry_unavailable | 503 stream_starting
 
 Auth: soft gate. If KALLON_PLATFORM_API_KEY is set, require X-Kallon-Api-Key
 or (for HLS media) ?api_key= — browsers/hls.js cannot always set custom
@@ -357,10 +361,12 @@ def _resolve_tower_hub(
         hub_host = _hub_host_from_endpoint(cust.gateway_endpoint)
         if not hub_host:
             return None, None, None, _err(
-                503, "hub_unreachable",
-                f"customer {tower.customer_id} has no gateway_endpoint; "
-                "provision the hub before tower proxy works",
+                503, "hub_not_provisioned",
+                f"control-plane registry: customer {tower.customer_id} has no gateway_endpoint — "
+                "provision the hub before tower proxy or live video can work "
+                "(this is not a live network outage)",
                 device_id=device_id,
+                customer_id=tower.customer_id,
             )
         return tower, hub_host, tower.vpn_ip, None
     except NotFound:
@@ -458,25 +464,108 @@ async def _proxy(
         read_timeout = _proxy_read_timeout()
     timeout = httpx.Timeout(connect=_proxy_connect_timeout(), read=read_timeout, write=10.0, pool=5.0)
     headers: dict[str, str] = {}
-    if _proxy_via_hub():
+    via_hub = _proxy_via_hub()
+    if via_hub:
         headers["X-Kallon-Hub-Proxy-Token"] = _hub_proxy_token()
         headers["X-Kallon-Tower-Vpn-Ip"] = vpn_ip
     try:
         resp = await _http_client().request(
             method, f"{base}{path}", json=json_body, params=params, headers=headers, timeout=timeout,
         )
-    except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout, httpx.NetworkError) as exc:
-        log.warning("tower %s unreachable at %s%s: %s", device_id, base, path, exc)
-        return _err(
-            503, "tower_offline",
-            f"tower did not respond ({exc.__class__.__name__}) — "
-            + ("hub proxy unreachable or VPN tunnel down" if _proxy_via_hub()
-               else "VPN tunnel down or tower rebooting"),
-            device_id=device_id,
+    except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout, httpx.NetworkError,
+            httpx.TimeoutException, httpx.RemoteProtocolError) as exc:
+        log.warning("proxy %s failed at %s%s: %s", device_id, base, path, exc)
+        return _classify_upstream_transport(
+            device_id, exc, via_hub=via_hub, base_url=base, kind="proxy",
         )
-    # Hub agent already returns platform-shaped errors; pass through.
+
+    # Hub agent already returns platform-shaped errors; remap hub-auth vs tower failures.
+    if via_hub and resp.status_code == 401:
+        remapped = _remap_hub_auth_failure(device_id, resp)
+        if remapped is not None:
+            return remapped
+
     content_type = resp.headers.get("content-type", "application/json")
     return Response(content=resp.content, status_code=resp.status_code, media_type=content_type)
+
+
+def _classify_upstream_transport(
+    device_id: str,
+    exc: BaseException,
+    *,
+    via_hub: bool,
+    base_url: str,
+    kind: str,
+) -> JSONResponse:
+    """Name the hop that failed — never blame the tower for an Artemis→hub outage."""
+    name = type(exc).__name__
+    connect_like = isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout))
+    if via_hub:
+        # base_url: http://{hub}:{port}/proxy/{id}  or  http://{hub}:{port}/hls/...
+        try:
+            hostport = base_url.split("://", 1)[1].split("/", 1)[0]
+        except IndexError:
+            hostport = "hub"
+        port = _hub_proxy_port() if kind == "proxy" else _hub_hls_port()
+        if kind == "hls":
+            code = "hub_hls_unreachable"
+            if connect_like:
+                msg = (
+                    f"control-plane could not connect to hub HLS agent at {hostport} ({name}) — "
+                    f"hls-proxy down, DNS/firewall, or port {port} closed "
+                    "(tower may still be online on WireGuard)"
+                )
+            else:
+                msg = (
+                    f"control-plane reached hub HLS agent at {hostport} but timed out ({name}) — "
+                    "hub overloaded or MediaMTX remux stuck"
+                )
+            hop = f"control-plane→hub:{port}"
+        elif connect_like:
+            code = "hub_proxy_unreachable"
+            msg = (
+                f"control-plane could not connect to hub tower-proxy at {hostport} ({name}) — "
+                f"tower-proxy down, DNS/firewall, or port {port} closed "
+                "(tower may still be online on WireGuard)"
+            )
+            hop = f"control-plane→hub:{port}"
+        else:
+            code = "hub_proxy_timeout"
+            msg = (
+                f"control-plane reached hub tower-proxy at {hostport} but timed out ({name}) — "
+                f"hub hung or hub→tower {device_id} :{_tower_gateway_port()} is slow"
+            )
+            hop = f"control-plane→hub:{port}→tower"
+        return _err(503, code, msg, device_id=device_id, hop=hop, cause=name)
+
+    # Direct lab mode: Artemis dials the tower VPN IP itself.
+    code = "tower_unreachable" if connect_like else "tower_timeout"
+    msg = (
+        f"control-plane → tower gateway at {base_url} failed ({name}) — "
+        "VPN down, gateway not listening, or tower rebooting"
+    )
+    return _err(503, code, msg, device_id=device_id, hop="control-plane→tower:8766", cause=name)
+
+
+def _remap_hub_auth_failure(device_id: str, resp: httpx.Response) -> Optional[JSONResponse]:
+    """Hub 401 is a token mismatch between Artemis and hub — not a buyer API-key failure."""
+    try:
+        body = resp.json()
+    except Exception:  # noqa: BLE001
+        return None
+    err = body.get("error") if isinstance(body, dict) else None
+    if not isinstance(err, dict):
+        return None
+    if err.get("code") != "unauthorized":
+        return None
+    return _err(
+        502,
+        "hub_proxy_auth_failed",
+        "hub rejected X-Kallon-Hub-Proxy-Token — Artemis KALLON_HUB_PROXY_TOKEN and "
+        "hub HUB_PROXY_TOKEN do not match",
+        device_id=device_id,
+        hop="control-plane→hub",
+    )
 
 
 class PTZMoveRequest(BaseModel):
@@ -662,15 +751,18 @@ async def _proxy_hls(device_id: str, camera: int, asset: str) -> Response:
     t0 = time.perf_counter()
     try:
         resp = await _http_client().get(url, headers=headers, timeout=timeout)
-    except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout, httpx.NetworkError) as exc:
+    except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout, httpx.NetworkError,
+            httpx.TimeoutException, httpx.RemoteProtocolError) as exc:
         elapsed_ms = (time.perf_counter() - t0) * 1000.0
         log.warning("live %s cam%s unreachable at %s after %.0fms: %s", device_id, camera, url, elapsed_ms, exc)
-        return _err(
-            503, "tower_offline",
-            f"hub HLS unreachable ({exc.__class__.__name__}) — "
-            "hub agent down, Lightsail port 8768 closed, or tunnel cold",
-            device_id=device_id,
+        return _classify_upstream_transport(
+            device_id, exc, via_hub=True, base_url=url, kind="hls",
         )
+
+    if resp.status_code == 401:
+        remapped = _remap_hub_auth_failure(device_id, resp)
+        if remapped is not None:
+            return remapped
 
     elapsed_ms = (time.perf_counter() - t0) * 1000.0
     hub_upstream = resp.headers.get("x-kallon-upstream-ms") or resp.headers.get("X-Kallon-Upstream-Ms")

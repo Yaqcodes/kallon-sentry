@@ -136,12 +136,16 @@ class Handler(BaseHTTPRequestHandler):
             self._reply(exc.code, payload or _err_body("tower_error", str(exc.reason), device_id=device_id), ct)
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
             log.warning("tower %s unreachable at %s: %s", device_id, target, exc)
+            detail = str(exc).strip() or type(exc).__name__
             self._reply(
                 503,
                 _err_body(
                     "tower_offline",
-                    f"tower did not respond ({type(exc).__name__}) — VPN tunnel down or tower rebooting",
+                    f"hub → tower {vpn_ip}:{TOWER_GATEWAY_PORT}{rest} failed ({type(exc).__name__}: {detail}) — "
+                    "wrong VPN IP, WireGuard down, gateway not listening on :8766, or tower rebooting",
                     device_id=device_id,
+                    hop=f"hub→tower:{TOWER_GATEWAY_PORT}",
+                    vpn_ip=vpn_ip,
                 ),
             )
 

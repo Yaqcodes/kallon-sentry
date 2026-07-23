@@ -251,12 +251,16 @@ class Handler(BaseHTTPRequestHandler):
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
             upstream_ms = (time.perf_counter() - t0) * 1000.0
             log.warning("HLS forward failed %s: %s", target, exc)
+            detail = str(exc).strip() or type(exc).__name__
             self._reply(
                 503,
                 _err_body(
-                    "tower_offline",
-                    f"HLS unreachable ({type(exc).__name__}) — MediaMTX down or tower RTSP offline",
+                    "hub_mediamtx_unreachable",
+                    f"hub HLS agent → local MediaMTX failed ({type(exc).__name__}: {detail}) — "
+                    "MediaMTX on the hub is down or not serving HLS "
+                    "(this is not the same as tower WireGuard offline)",
                     device_id=device_id,
+                    hop="hub→mediamtx:8888",
                 ),
                 extra_headers={
                     "X-Kallon-Upstream-Ms": f"{upstream_ms:.1f}",

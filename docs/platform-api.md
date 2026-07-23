@@ -80,19 +80,45 @@ All platform endpoints (fleet + proxy) return errors as:
 | 409 | `conflict` | e.g. `POST /v1/towers` device already exists |
 | 422 | `invalid_request` | Malformed body/params |
 | 502 | `tower_error` | Tower reached, but its gateway returned an error |
+| 502 | `hub_proxy_auth_failed` | Hub rejected `X-Kallon-Hub-Proxy-Token` (Artemis↔hub mismatch) |
 | 502 | `s3_error` | S3/B2 presign or delete failure |
-| 503 | `tower_offline` | Tower unreachable over VPN (tunnel down / rebooting) |
+| 503 | `hub_not_provisioned` | Customer has no `gateway_endpoint` in registry (not a live outage) |
+| 503 | `hub_proxy_misconfigured` | Control plane missing `KALLON_HUB_PROXY_TOKEN` |
+| 503 | `hub_proxy_unreachable` | Control plane cannot connect to hub `:8767` (tower may still be online) |
+| 503 | `hub_proxy_timeout` | Hub `:8767` connected but timed out (hub hung or hub→tower slow) |
+| 503 | `hub_hls_unreachable` | Control plane cannot reach hub HLS `:8768` |
+| 503 | `hub_mediamtx_unreachable` | Hub HLS agent cannot reach local MediaMTX |
+| 503 | `tower_offline` | Hub → tower `:8766` failed (VPN / gateway / reboot) |
+| 503 | `tower_unreachable` / `tower_timeout` | Direct (lab) control-plane → tower gateway failure |
 | 503 | `registry_unavailable` | Registry DB unreachable |
 | 503 | `s3_not_configured` | Playback/download without Platform S3 credentials |
-| 503 | `hub_proxy_misconfigured` | Hub proxy token/host missing |
 | 503 | `stream_starting` | Live HLS not ready yet (clients should retry) |
 
-`tower_offline` example:
+Messages name the failing hop (`control-plane→hub`, `hub→tower`, etc.) so
+"tower offline" is reserved for actual tower-gateway failures — not hub outages.
+
+`tower_offline` example (hub reached, tower gateway did not):
 
 ```json
-{"error": {"code": "tower_offline",
-           "message": "tower did not respond within 10.0s",
-           "device_id": "kln_acme_000042"}}
+{"error": {
+  "code": "tower_offline",
+  "message": "hub → tower 10.50.0.2:8766/api/status failed (URLError: timed out) — wrong VPN IP, WireGuard down, gateway not listening on :8766, or tower rebooting",
+  "device_id": "kln_acme_000042",
+  "hop": "hub→tower:8766",
+  "vpn_ip": "10.50.0.2"
+}}
+```
+
+`hub_proxy_unreachable` example (tower may still be fine):
+
+```json
+{"error": {
+  "code": "hub_proxy_unreachable",
+  "message": "control-plane could not connect to hub tower-proxy at 18.x.x.x:8767 (ConnectError) — tower-proxy down, DNS/firewall, or port 8767 closed (tower may still be online on WireGuard)",
+  "device_id": "kln_acme_000042",
+  "hop": "control-plane→hub:8767",
+  "cause": "ConnectError"
+}}
 ```
 
 The pre-existing enrollment endpoints keep FastAPI's `{"detail": ...}` error

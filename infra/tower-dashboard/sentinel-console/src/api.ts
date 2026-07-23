@@ -122,8 +122,17 @@ export interface RecordingStatus {
 
 async function getJSON<T>(url: string): Promise<T> {
   const r = await fetch(url, { headers: { Accept: 'application/json' } });
-  if (!r.ok) throw new Error(`HTTP ${r.status}`);
-  return (await r.json()) as T;
+  const body = await r.json().catch(() => ({} as Record<string, unknown>));
+  if (!r.ok) {
+    const errObj = (body as { error?: { code?: string; message?: string } }).error;
+    const msg = errObj?.message
+      || (typeof (body as { detail?: unknown }).detail === 'string' ? (body as { detail: string }).detail : undefined)
+      || `Gateway request failed (HTTP ${r.status})`;
+    const err = new Error(msg) as Error & { code?: string };
+    if (errObj?.code) err.code = errObj.code;
+    throw err;
+  }
+  return body as T;
 }
 
 export const getConfig = () => getJSON<ConfigResponse>('/api/config');
