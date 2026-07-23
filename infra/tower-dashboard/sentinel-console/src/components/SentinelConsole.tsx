@@ -292,7 +292,7 @@ export default function SentinelConsole({ onOpenRecordings }: Props) {
       <header className="topbar">
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           <span style={{ fontFamily: font.display, fontWeight: 700, fontSize: 24, letterSpacing: '.24em', color: colors.textBright }}>SENTINEL</span>
-          <span style={{ fontFamily: font.display, fontWeight: 500, fontSize: 14, letterSpacing: '.32em', color: colors.textFaint }}>TOWER CONTROL</span>
+          <span style={{ fontFamily: font.display, fontWeight: 500, fontSize: 14, letterSpacing: '.32em', color: colors.textFaint }}>LIVE</span>
           <nav className="tower-nav" aria-label="Main sections">
             <button type="button" className="active">LIVE</button>
             {onOpenRecordings && (
